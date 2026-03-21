@@ -1,0 +1,8 @@
+[package]
+name = "dwg-worker"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dwg-libredwg = { path = "../dwg-libredwg" }
+dwg-worker-core = { path = "../dwg-worker-core" }

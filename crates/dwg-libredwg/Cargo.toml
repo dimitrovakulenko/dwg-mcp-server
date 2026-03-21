@@ -1,0 +1,17 @@
+[package]
+name = "dwg-libredwg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dwg-worker-core = { path = "../dwg-worker-core" }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dependencies.libredwg-sys]
+path = "../libredwg-sys"
+optional = true
+
+[features]
+default = ["native"]
+native = ["dep:libredwg-sys"]

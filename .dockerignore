@@ -1,0 +1,5 @@
+target
+__pycache__
+.git
+.gitignore
+server/tests/__pycache__

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dwg-mcp-server"
+version = "0.1.0"
+description = "Python MCP host for the DWG worker"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.26.0,<2",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
