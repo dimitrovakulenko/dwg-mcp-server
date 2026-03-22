@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install LibreDWG / Rust build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake bison build-essential clang flex libclang-dev \
+            libtool libxml2-dev make pkg-config texinfo
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Build LibreDWG (third_party)
+        run: bash scripts/build-libredwg.sh
+
+      - name: Cargo test (workspace)
+        run: cargo test --workspace
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python package (MCP host + deps)
+        run: python3 -m pip install --user "./server"
+
+      - name: Python integration tests (excludes Docker-only tests)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/server/src
+        run: |
+          python3 -m unittest \
+            server.tests.test_file_access \
+            server.tests.test_host \
+            server.tests.test_mcp_stdio \
+            -v
