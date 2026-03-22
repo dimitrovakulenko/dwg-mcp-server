@@ -411,6 +411,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
   if (strchr(fp.type, 'H'))
     {
       BITCODE_H ref = NULL;
+      if (fp.size != sizeof(ref))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &ref, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_HANDLE;
@@ -422,6 +424,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
       || bridge_type_matches(fp.type, "2DD"))
     {
       dwg_point_2d point;
+      if (fp.size != sizeof(point))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &point, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_POINT2D;
@@ -434,6 +438,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
       || bridge_type_matches(fp.type, "ENC"))
     {
       Dwg_Color color;
+      if (fp.size != sizeof(color))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &color, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_INTEGER;
@@ -446,6 +452,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
       || bridge_type_matches(fp.type, "BE"))
     {
       dwg_point_3d point;
+      if (fp.size != sizeof(point))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &point, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_POINT3D;
@@ -459,6 +467,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
       || bridge_type_matches(fp.type, "BT"))
     {
       double value = 0.0;
+      if (fp.size != sizeof(value))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &value, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_DOUBLE;
@@ -469,6 +479,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
   if (bridge_type_matches(fp.type, "B") || bridge_type_matches(fp.type, "BB"))
     {
       BITCODE_B value = 0;
+      if (fp.size != sizeof(value))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &value, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_BOOL;
@@ -479,6 +491,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
   if (bridge_type_matches(fp.type, "RC"))
     {
       BITCODE_RC value = 0;
+      if (fp.size != sizeof(value))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &value, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_INTEGER;
@@ -490,6 +504,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
       || bridge_type_matches(fp.type, "BSd"))
     {
       BITCODE_BS value = 0;
+      if (fp.size != sizeof(value))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &value, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_INTEGER;
@@ -500,6 +516,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
   if (bridge_type_matches(fp.type, "RL") || bridge_type_matches(fp.type, "BL"))
     {
       BITCODE_BL value = 0;
+      if (fp.size != sizeof(value))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &value, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_INTEGER;
@@ -510,6 +528,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
   if (bridge_type_matches(fp.type, "BLL") || bridge_type_matches(fp.type, "RLL"))
     {
       BITCODE_RLL value = 0;
+      if (fp.size != sizeof(value))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &value, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_INTEGER;
@@ -520,6 +540,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
   if (bridge_type_matches(fp.type, "BLd"))
     {
       BITCODE_BLd value = 0;
+      if (fp.size != sizeof(value))
+        return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &value, &fp))
         return false;
       out->kind = BRIDGE_DWG_FIELD_INTEGER;
