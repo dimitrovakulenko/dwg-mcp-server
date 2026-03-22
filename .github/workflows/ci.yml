@@ -70,6 +70,9 @@ jobs:
       - name: Cargo test (workspace)
         run: cargo test --workspace
 
+      - name: Build dwg-worker binary for Python tests
+        run: cargo build -p dwg-worker
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -80,6 +83,7 @@ jobs:
 
       - name: Python integration tests (excludes Docker-only tests)
         env:
+          DWG_WORKER_BIN: ${{ github.workspace }}/target/debug/dwg-worker
           PYTHONPATH: ${{ github.workspace }}/server/src
         run: |
           python3 -m unittest \
