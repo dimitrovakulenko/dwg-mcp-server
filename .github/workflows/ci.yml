@@ -49,22 +49,26 @@ jobs:
         id: libredwg-cache-restore
         uses: actions/cache/restore@v4
         with:
-          path: third_party/libredwg/src/.libs
+          path: |
+            third_party/libredwg/src/.libs
+            third_party/libredwg/src/config.h
           key: libredwg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.libredwg-rev.outputs.rev }}-${{ hashFiles('scripts/build-libredwg.sh') }}
 
       - name: Build LibreDWG (third_party)
         run: |
-          if [ -f third_party/libredwg/src/.libs/libredwg.a ]; then
+          if [ -f third_party/libredwg/src/.libs/libredwg.a ] && [ -f third_party/libredwg/src/config.h ]; then
             echo "Using cached LibreDWG build"
           else
             bash scripts/build-libredwg.sh
           fi
 
       - name: Save LibreDWG build cache
-        if: ${{ steps.libredwg-cache-restore.outputs.cache-hit != 'true' && hashFiles('third_party/libredwg/src/.libs/libredwg.a') != '' }}
+        if: ${{ steps.libredwg-cache-restore.outputs.cache-hit != 'true' && hashFiles('third_party/libredwg/src/.libs/libredwg.a', 'third_party/libredwg/src/config.h') != '' }}
         uses: actions/cache/save@v4
         with:
-          path: third_party/libredwg/src/.libs
+          path: |
+            third_party/libredwg/src/.libs
+            third_party/libredwg/src/config.h
           key: ${{ steps.libredwg-cache-restore.outputs.cache-primary-key }}
 
       - name: Cargo test (workspace)
