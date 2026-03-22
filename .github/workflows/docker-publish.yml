@@ -21,10 +21,17 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Checkout (with submodules)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
+
+      - name: Verify LibreDWG tree
+        run: test -f third_party/libredwg/autogen.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
