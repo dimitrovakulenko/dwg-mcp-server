@@ -26,6 +26,10 @@ jobs:
       - name: Init submodules
         run: git submodule update --init --recursive
 
+      - name: Resolve LibreDWG revision
+        id: libredwg-rev
+        run: echo "rev=$(git -C third_party/libredwg rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Install LibreDWG / Rust build dependencies
         run: |
           sudo apt-get update
@@ -41,8 +45,19 @@ jobs:
         with:
           workspaces: "."
 
+      - name: Cache LibreDWG build
+        uses: actions/cache@v4
+        with:
+          path: third_party/libredwg/src/.libs
+          key: libredwg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.libredwg-rev.outputs.rev }}-${{ hashFiles('scripts/build-libredwg.sh') }}
+
       - name: Build LibreDWG (third_party)
-        run: bash scripts/build-libredwg.sh
+        run: |
+          if [ -f third_party/libredwg/src/.libs/libredwg.a ]; then
+            echo "Using cached LibreDWG build"
+          else
+            bash scripts/build-libredwg.sh
+          fi
 
       - name: Cargo test (workspace)
         run: cargo test --workspace
