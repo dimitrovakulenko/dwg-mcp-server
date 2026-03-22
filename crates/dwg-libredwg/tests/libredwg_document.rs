@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 
 use dwg_libredwg::{LibreDwgFactory, describe_supported_type, list_supported_types};
 use dwg_worker_core::{
-    BackendFactory, DwgDocument, FilterOperator, PropertyFilter, Projection,
+    BackendFactory, DwgDocument, FilterOperator, GetObjectsRequest, PropertyFilter, Projection,
     QueryMode, QueryObjectsRequest, QueryScope, QuerySpace, RelationDirection, RelationFilter,
     SortDirection, SortSpec, StdioHandler,
 };
@@ -24,6 +24,11 @@ fn lock_libredwg() -> std::sync::MutexGuard<'static, ()> {
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testData/house_plan.dwg")
+}
+
+fn dyn_blocks_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testData/dyn-blocks.dwg")
 }
 
 #[test]
@@ -426,6 +431,248 @@ fn supported_types_and_properties_cover_3d_polylines_and_angular_dimensions() {
         .map(|item| item.name)
         .collect::<Vec<_>>();
     assert!(xrecord_properties.contains(&"xdata".to_owned()));
+}
+
+#[test]
+fn dyn_blocks_exposes_dynamic_block_history_dictionaries_and_xrecords() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&dyn_blocks_fixture_path())
+        .expect("fixture should open");
+
+    let dynamic_block_reference = document
+        .get_objects(GetObjectsRequest {
+            handles: vec!["CBD".to_owned()],
+            projection: Projection::Full,
+            select: Some(vec![
+                "xdicobjhandle".to_owned(),
+                "block_header".to_owned(),
+                "block_representation_dict_handle".to_owned(),
+                "app_data_cache_handle".to_owned(),
+                "enhanced_block_data_handle".to_owned(),
+                "enhanced_block_data_xrecords".to_owned(),
+            ]),
+        })
+        .expect("block reference should load");
+    assert!(dynamic_block_reference.missing_handles.is_empty());
+    assert_eq!(
+        dynamic_block_reference.items[0]
+            .properties
+            .get("xdicobjhandle"),
+        Some(&json!("CBE"))
+    );
+    assert_eq!(
+        dynamic_block_reference.items[0]
+            .properties
+            .get("block_header"),
+        Some(&json!("CD8"))
+    );
+    assert_eq!(
+        dynamic_block_reference.items[0]
+            .properties
+            .get("block_representation_dict_handle"),
+        Some(&json!("CF2"))
+    );
+    assert_eq!(
+        dynamic_block_reference.items[0]
+            .properties
+            .get("app_data_cache_handle"),
+        Some(&json!("CF4"))
+    );
+    assert_eq!(
+        dynamic_block_reference.items[0]
+            .properties
+            .get("enhanced_block_data_handle"),
+        Some(&json!("D13"))
+    );
+    assert_eq!(
+        dynamic_block_reference.items[0]
+            .properties
+            .get("enhanced_block_data_xrecords"),
+        Some(&json!(["D14", "D17", "D18", "D15", "D16"]))
+    );
+
+    let dictionaries = document
+        .get_objects(GetObjectsRequest {
+            handles: vec![
+                "CBE".to_owned(),
+                "CF2".to_owned(),
+                "CF4".to_owned(),
+                "D13".to_owned(),
+            ],
+            projection: Projection::Full,
+            select: Some(vec![
+                "items".to_owned(),
+                "item_handles".to_owned(),
+                "ownerhandle".to_owned(),
+                "numitems".to_owned(),
+            ]),
+        })
+        .expect("history dictionaries should load");
+    assert!(dictionaries.missing_handles.is_empty());
+
+    let by_handle = dictionaries
+        .items
+        .iter()
+        .map(|item| (item.handle.as_str(), &item.properties))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    assert_eq!(
+        by_handle["D13"].get("items"),
+        Some(&json!({"1": "D18", "8": "D15", "9": "D16"}))
+    );
+    assert_eq!(
+        by_handle["CBE"].get("item_handles"),
+        Some(&json!(["CF2"]))
+    );
+    assert_eq!(
+        by_handle["CF2"].get("item_handles"),
+        Some(&json!(["CF3", "CF4"]))
+    );
+    assert_eq!(
+        by_handle["CF4"].get("item_handles"),
+        Some(&json!(["D13"]))
+    );
+    assert_eq!(
+        by_handle["D13"].get("item_handles"),
+        Some(&json!(["D14", "D17", "D18", "D15", "D16"]))
+    );
+
+    let history_xrecords = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("AcDbXrecord".to_owned()),
+            generic_type: None,
+            where_clauses: Vec::new(),
+            scope: None,
+            relations: vec![RelationFilter {
+                property: "item_handles".to_owned(),
+                direction: RelationDirection::Incoming,
+                target_type_name: Some("AcDbDictionary".to_owned()),
+                target_generic_type: None,
+                where_clauses: vec![PropertyFilter {
+                    property: "handle".to_owned(),
+                    op: FilterOperator::Eq,
+                    value: Some(json!("D13")),
+                    values: Vec::new(),
+                }],
+            }],
+            sort: vec![SortSpec {
+                property: "handle".to_owned(),
+                direction: SortDirection::Asc,
+            }],
+            mode: QueryMode::Full,
+            projection: Projection::Full,
+            select: Some(vec!["xdata".to_owned(), "ownerhandle".to_owned()]),
+            limit: 10,
+            cursor: None,
+        })
+        .expect("history xrecords should be reachable");
+    assert_eq!(history_xrecords.total, 5);
+    assert_eq!(
+        history_xrecords
+            .items
+            .iter()
+            .map(|item| item.handle.as_str())
+            .collect::<Vec<_>>(),
+        vec!["D14", "D15", "D16", "D17", "D18"]
+    );
+    assert_eq!(
+        history_xrecords.items[0].properties.get("ownerhandle"),
+        Some(&json!("D13"))
+    );
+    assert_eq!(
+        history_xrecords.items[0].properties.get("xdata"),
+        Some(&json!([
+            [1071, 18597260],
+            [1071, 25303744],
+            [70, 25],
+            [70, 104],
+            [10, [-16.450129447944846, -0.09901143873563002, 0]],
+            [10, [1982.9324090756895, -0.09901143873566041, 0]],
+            [10, [0, 0, -1]]
+        ]))
+    );
+    assert_eq!(
+        history_xrecords.items[1].properties.get("xdata"),
+        Some(&json!([
+            [1071, 6895636],
+            [1071, 9291323],
+            [70, 25],
+            [70, 104],
+            [40, 0]
+        ]))
+    );
+}
+
+#[test]
+fn dyn_blocks_exposes_evaluation_graph_nodes_and_edges() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&dyn_blocks_fixture_path())
+        .expect("fixture should open");
+
+    let eval_graphs = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("AcDbEvalGraph".to_owned()),
+            generic_type: None,
+            where_clauses: Vec::new(),
+            scope: None,
+            relations: Vec::new(),
+            sort: Vec::new(),
+            mode: QueryMode::Handles,
+            projection: Projection::Summary,
+            select: None,
+            limit: 10,
+            cursor: None,
+        })
+        .expect("eval graphs should be queryable");
+    assert!(!eval_graphs.handles.is_empty());
+
+    let first_handle = eval_graphs.handles[0].clone();
+    let eval_graph = document
+        .get_objects(GetObjectsRequest {
+            handles: vec![first_handle.clone()],
+            projection: Projection::Full,
+            select: Some(vec![
+                "first_nodeid".to_owned(),
+                "first_nodeid_copy".to_owned(),
+                "num_nodes".to_owned(),
+                "num_edges".to_owned(),
+                "nodes".to_owned(),
+                "edges".to_owned(),
+                "ownerhandle".to_owned(),
+            ]),
+        })
+        .expect("eval graph should load");
+    assert!(eval_graph.missing_handles.is_empty());
+    let props = &eval_graph.items[0].properties;
+
+    assert!(props.get("first_nodeid").is_some());
+    assert!(props.get("first_nodeid_copy").is_some());
+    assert!(props.get("num_nodes").is_some());
+    assert!(props.get("num_edges").is_some());
+
+    let nodes = props.get("nodes").and_then(|v| v.as_array()).expect("nodes array");
+    assert!(!nodes.is_empty());
+    let first_node = nodes[0].as_object().expect("node object");
+    assert!(first_node.contains_key("id"));
+    assert!(first_node.contains_key("edge_flags"));
+    assert!(first_node.contains_key("nextid"));
+    assert!(first_node.contains_key("evalexpr"));
+    assert!(first_node.contains_key("node"));
+
+    let edges = props.get("edges").and_then(|v| v.as_array()).expect("edges array");
+    assert!(!edges.is_empty());
+    let first_edge = edges[0].as_object().expect("edge object");
+    assert!(first_edge.contains_key("id"));
+    assert!(first_edge.contains_key("nextid"));
+    assert!(first_edge.contains_key("e1"));
+    assert!(first_edge.contains_key("e2"));
+    assert!(first_edge.contains_key("e3"));
+    assert!(first_edge.contains_key("out_edge"));
+
+    assert_eq!(nodes.len(), props["num_nodes"].as_i64().unwrap() as usize);
+    assert_eq!(edges.len(), props["num_edges"].as_i64().unwrap() as usize);
 }
 
 #[test]
