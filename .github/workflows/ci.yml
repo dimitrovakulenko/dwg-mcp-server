@@ -23,11 +23,8 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Init submodules (LibreDWG + nested e.g. jsmn)
+      - name: Init submodules
         run: git submodule update --init --recursive
-
-      - name: Verify LibreDWG tree
-        run: test -f third_party/libredwg/autogen.sh
 
       - name: Install LibreDWG / Rust build dependencies
         run: |
