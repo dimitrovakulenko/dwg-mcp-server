@@ -59,92 +59,38 @@ A typical flow is:
 3. Fetch known handles with `dwg.get_objects` or search the drawing with `dwg.query_objects`.
 4. Close the session with `dwg.close_file`.
 
-## How It Works
+## Architecture
 
-### Python host and worker lifecycle
+### Runtime model
 
-The Python MCP host is intentionally thin.
-It exposes the MCP tool surface, validates file access, starts worker processes, and keeps track of open document sessions.
+In the packaged deployment, DWG MCP Server is a stdio MCP server implemented in Python and typically run inside a Linux container.
+The Python host exposes the MCP tools, validates file access, and manages document sessions.
 
-Each `dwg.open_file` call creates a dedicated `dwg-worker` process and assigns it a host-side `documentId`.
-That document id is what MCP clients use for later calls such as `dwg.list_file_types`, `dwg.get_objects`, and `dwg.query_objects`.
-Closing the document terminates the worker for that session.
+Each `dwg.open_file` call starts a dedicated Rust `dwg-worker` process for that DWG and returns a host-side `documentId`.
+All later file-scoped calls use that document id.
+`dwg.close_file` terminates the worker for that session.
 
-This means open documents are isolated from each other at the process level.
-The host does not share mutable drawing state across sessions.
-
-### Worker protocol and document model
+### Worker and query model
 
 The Rust worker speaks newline-delimited JSON over stdin and stdout.
-Its request methods map directly to the MCP tool surface:
-`openFile`, `closeFile`, `listTypes`, `listFileTypes`, `describeType`, `getObjects`, and `queryObjects`.
+When it opens a DWG through LibreDWG, it first builds an in-memory indexed document.
+That upfront indexing step is central to the design: the server pays the cost once when the file is opened, then answers later requests against the index instead of rescanning the DWG each time.
 
-When a file is opened, the LibreDWG-backed backend reads the DWG and builds an in-memory indexed document.
-Each indexed object keeps:
+The indexed model stores object handles, kinds, type names, generic types, summary and full properties, and derived block, layout, and space membership.
+It also stores supported type metadata such as aliases, default projections, and property definitions.
 
-- its handle
-- kind, type name, and generic type
-- summary properties and full properties
-- container block membership
-- derived layout membership
-- derived model-space or paper-space membership when available
+`dwg.get_objects` is direct lookup by handle.
+`dwg.query_objects` runs over indices for handle, type, generic type, kind, exact property values, block, layout, and space, then applies filters, scopes, relation traversal, sorting, projection, and pagination.
+This is what makes queries over blocks, layers, layouts, references, and related objects practical on an opened drawing.
 
-Supported type metadata is also captured.
-For each type, the backend exposes aliases, default projected properties, and property definitions, including whether a property is queryable and whether it points at another object type.
+### Access and packaging
 
-### Query engine and indexing
+The server accepts absolute local paths or `file://` URIs only.
+If the MCP client exposes roots, opened DWGs must stay inside those roots.
+If `DWG_MCP_HOST_FOLDERS` is configured, opened DWGs must also stay inside one of those allowed folders.
 
-The worker does not execute every query by scanning the full drawing from scratch.
-When a DWG is opened, it builds indices for:
-
-- handle
-- type name
-- generic type
-- object kind
-- exact property values
-- container block
-- layout
-- model space and paper space
-
-`dwg.query_objects` uses those indices to reduce the candidate set before applying the remaining work.
-It can combine:
-
-- exact and range filters over properties
-- scope filters by block, layout, owner, or space
-- relation filters in outgoing or incoming direction
-- sort order
-- pagination
-- summary or full projections
-
-Relation filters matter because many useful DWG questions are graph questions.
-For example, a block reference points to a block definition, dictionaries point to contained records, and objects may carry handles that refer to related objects elsewhere in the file.
-The query engine can follow those handle-valued properties in either direction and then filter on the related objects.
-
-`dwg.get_objects` is the direct lookup path.
-It is useful when the client already knows the handles it wants and needs exact records back in the same order.
-Missing handles are returned separately instead of failing the whole request.
-
-### File access rules
-
-The server accepts absolute local paths or `file://` URIs.
-It does not open arbitrary paths by default.
-
-If the MCP client provides roots, the requested DWG must stay inside those roots.
-If `DWG_MCP_HOST_FOLDERS` is configured, the requested DWG must also stay inside one of those allowed folders.
-The host returns the configured folders in the error message when access is denied.
-
-The Docker wrapper keeps the same model.
-It mounts the configured host folders into the container read-only and passes the allowed folder list into the server through `DWG_MCP_HOST_FOLDERS`.
-
-### Docker packaging
-
-The Docker image is built in three stages:
-
-1. Build LibreDWG from the vendored submodule.
-2. Build the Rust `dwg-worker` binary against that LibreDWG build.
-3. Assemble a slim Python runtime image with the MCP host, the worker binary, and the required native runtime pieces.
-
-This keeps the runtime image smaller than a full build environment while still shipping the native worker and the LibreDWG shared library it depends on.
+The Docker wrapper mounts those host folders into the container read-only and forwards the same folder list to the Python host.
+The Docker image itself is built in three stages: LibreDWG, the Rust worker, and the final Python runtime image.
 
 ## Build and Test From Source
 
