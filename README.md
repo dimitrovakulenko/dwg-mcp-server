@@ -221,5 +221,5 @@ bash scripts/clean-build-artifacts.sh --with-libredwg
 
 ## License
 
-This repository does not currently declare a top-level project license file.
-Vendored third-party code includes LibreDWG; see `third_party/libredwg/COPYING` for its license terms.
+This project is licensed under the GNU General Public License v3.0.
+See `LICENSE` for the full license text.
