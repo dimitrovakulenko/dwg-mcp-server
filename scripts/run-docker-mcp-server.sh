@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Host folders to mount read-only (semicolon-separated); default current working directory
-DEFAULT_HOST_FOLDER="$(pwd -P)"
-HOST_FOLDERS="${DWG_MCP_HOST_FOLDERS:-$DEFAULT_HOST_FOLDER}"
+# Host folders to mount read-only (semicolon-separated); default $HOME/Documents
+HOST_FOLDERS="${DWG_MCP_HOST_FOLDERS:-$HOME/Documents}"
 
 MOUNTS=()
 EXPOSED_FOLDERS=()
