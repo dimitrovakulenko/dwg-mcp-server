@@ -12,7 +12,9 @@ The npm package launches the published Docker image.
 ### Codex
 
 ```bash
-codex mcp add dwg-mcp -- npx -y @dmytro-prototypes/dwg-mcp-server
+codex mcp add dwg-mcp \
+  --env DWG_MCP_HOST_FOLDERS=/absolute/path/to/your/dwg/folder \
+  -- npx -y @dmytro-prototypes/dwg-mcp-server
 ```
 
 ### Claude
@@ -38,7 +40,7 @@ claude mcp add --scope user --transport stdio --env DWG_MCP_HOST_FOLDERS=/absolu
 ```
 
 DWG files must be opened from allowed folders only.
-If you run the Docker wrapper, configure those folders with `DWG_MCP_HOST_FOLDERS`.
+Set `DWG_MCP_HOST_FOLDERS` to one or more absolute host folders separated by `;`.
 
 ## Exposed Tools
 
@@ -149,7 +151,7 @@ DWG_MCP_HOST_FOLDERS="$HOME/Documents;$HOME/Desktop/dwg" \
 bash scripts/run-docker-mcp-server.sh
 ```
 
-By default, the Docker launcher exposes `~/Documents`.
+By default, the Docker launcher exposes the current working directory.
 
 ### Clean rebuild
 

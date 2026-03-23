@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOST_FOLDERS="${DWG_MCP_HOST_FOLDERS:-$HOME/Documents}"
+DEFAULT_HOST_FOLDER="$(pwd -P)"
+HOST_FOLDERS="${DWG_MCP_HOST_FOLDERS:-$DEFAULT_HOST_FOLDER}"
 IMAGE="ghcr.io/dimitrovakulenko/dwg-mcp-server:latest"
 
 if ! command -v docker >/dev/null 2>&1; then
