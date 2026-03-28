@@ -380,6 +380,41 @@ bridge_type_matches(const char *type, const char *candidate)
   return type && strcmp(type, candidate) == 0;
 }
 
+static bool
+bridge_handle_ref_is_known(const Dwg_Data *dwg, BITCODE_H ref)
+{
+  BITCODE_BL index;
+
+  if (!dwg || !dwg->object_ref || !ref)
+    return false;
+
+  for (index = 0; index < dwg->num_object_refs; index++)
+    {
+      if (dwg->object_ref[index] == ref)
+        return true;
+    }
+
+  return false;
+}
+
+static bool
+bridge_try_get_handle_value(const Dwg_Object *obj, BITCODE_H ref,
+                            BITCODE_RLL *out_value)
+{
+  if (!out_value)
+    return false;
+
+  *out_value = 0;
+  if (!ref)
+    return true;
+
+  if (!obj || !bridge_handle_ref_is_known(obj->parent, ref))
+    return false;
+
+  *out_value = ref->absolute_ref;
+  return true;
+}
+
 bool
 bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
                             BridgeDwgFieldValue *out)
@@ -403,7 +438,13 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
   memcpy(&fp, field, sizeof(fp));
 
   if (fp.is_string)
-    return bridge_read_string_field(obj, fieldname, is_common, out, &fp);
+    {
+      /* TF/TFv are binary payloads (e.g. previews), not guaranteed C strings. */
+      if (bridge_type_matches(fp.type, "TF") || bridge_type_matches(fp.type, "TFv"))
+        return false;
+
+      return bridge_read_string_field(obj, fieldname, is_common, out, &fp);
+    }
 
   if (strchr(fp.type, '*'))
     return false;
@@ -411,12 +452,15 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
   if (strchr(fp.type, 'H'))
     {
       BITCODE_H ref = NULL;
+      BITCODE_RLL handle_value = 0;
       if (fp.size != sizeof(ref))
         return false;
       if (!bridge_read_raw_field(obj, fieldname, is_common, &ref, &fp))
         return false;
+      if (!bridge_try_get_handle_value(obj, ref, &handle_value))
+        return false;
       out->kind = BRIDGE_DWG_FIELD_HANDLE;
-      out->handle_value = ref ? ref->absolute_ref : 0;
+      out->handle_value = handle_value;
       return true;
     }
 

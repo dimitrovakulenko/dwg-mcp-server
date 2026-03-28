@@ -467,7 +467,7 @@ fn classify_field_kind(raw_kind: &str) -> String {
 }
 
 fn is_queryable_field(field_name: &str, raw_kind: &str) -> bool {
-    field_name != "parent" && !raw_kind.contains('*')
+    field_name != "parent" && !field_name.starts_with("unknown") && !raw_kind.contains('*')
 }
 
 fn merge_properties(
