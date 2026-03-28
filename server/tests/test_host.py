@@ -174,13 +174,26 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(closed["closed"])
 
     async def test_open_file_failure_mentions_configured_access_folders(self) -> None:
+        blocked = str(repo_root() / "testData" / "house_plan.dwg")
+        with patch.dict(
+            os.environ,
+            {"DWG_MCP_HOST_FOLDERS": str((repo_root() / "server").resolve())},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "Allowed folders"):
+                await self.app.call_tool("dwg.open_file", {"path": blocked})
+            with self.assertRaisesRegex(ValueError, "DWG_MCP_HOST_FOLDERS"):
+                await self.app.call_tool("dwg.open_file", {"path": blocked})
+
+    async def test_open_file_missing_file_does_not_mention_configured_access_folders(self) -> None:
         missing = str(repo_root() / "testData" / "missing.dwg")
         with patch.dict(
             os.environ,
             {"DWG_MCP_HOST_FOLDERS": str((repo_root() / "testData").resolve())},
             clear=False,
         ):
-            with self.assertRaisesRegex(ValueError, "Configured access folders"):
+            with self.assertRaises(ValueError) as context:
                 await self.app.call_tool("dwg.open_file", {"path": missing})
-            with self.assertRaisesRegex(ValueError, "copy or move the DWG"):
-                await self.app.call_tool("dwg.open_file", {"path": missing})
+        text = str(context.exception)
+        self.assertNotIn("Allowed folders", text)
+        self.assertNotIn("DWG_MCP_HOST_FOLDERS", text)

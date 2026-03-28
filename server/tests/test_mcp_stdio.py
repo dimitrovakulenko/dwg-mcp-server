@@ -233,7 +233,7 @@ class McpStdioTests(unittest.TestCase):
         self.assertTrue(denied["result"]["isError"])
         self.assertIn("outside the client roots", denied["result"]["content"][0]["text"])
 
-    def test_open_file_error_explains_to_copy_into_allowed_folder(self) -> None:
+    def test_open_file_error_explains_how_to_access_other_folders(self) -> None:
         restricted_client = McpProcessClient(
             [sys.executable, "-m", "dwg_mcp_server"],
             cwd=repo_root(),
@@ -255,8 +255,9 @@ class McpStdioTests(unittest.TestCase):
         )
         self.assertTrue(denied["result"]["isError"])
         text = denied["result"]["content"][0]["text"]
-        self.assertIn("Configured access folders", text)
-        self.assertIn("copy or move the DWG", text)
+        self.assertIn("Allowed folders", text)
+        self.assertIn("Copy the DWG there", text)
+        self.assertIn("DWG_MCP_HOST_FOLDERS", text)
 
     def test_dynamic_block_history_xrecord_is_exposed_via_mcp(self) -> None:
         self.client.initialize()

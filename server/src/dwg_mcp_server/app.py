@@ -18,6 +18,12 @@ from .file_access import (
 )
 from .worker_client import SessionManager, WorkerClientError
 
+SERVER_INSTRUCTIONS = (
+    "Open a DWG with dwg.open_file before using file-scoped tools. "
+    "Use dwg.list_file_types to discover valid type names for that file. "
+    "open_file paths must be inside client roots and configured access folders."
+)
+
 
 class DwgMcpApplication:
     def __init__(self, session_manager: SessionManager | None = None) -> None:
@@ -33,12 +39,7 @@ class DwgMcpApplication:
         self.server = Server(
             "dwg-mcp-server",
             version="0.1.0",
-            instructions=(
-                "Open a DWG first, then inspect the available types in that file before querying "
-                "large result sets. This server can only open files from the configured access "
-                "folders. If a DWG is outside those folders, copy or move it into an allowed "
-                "folder first, then retry dwg.open_file with the new absolute path."
-            ),
+            instructions=SERVER_INSTRUCTIONS,
             lifespan=lifespan,
         )
         self._setup_handlers()
@@ -57,22 +58,20 @@ class DwgMcpApplication:
             Tool(
                 name="dwg.open_file",
                 description=(
-                    "Open a DWG file from an absolute path or file:// URI in a dedicated worker "
-                    "process and return a documentId. When the client exposes MCP roots, path- and "
-                    "fileUri-based opens must stay under those roots. When configured access "
-                    "folders are present, the file must also be inside one of them."
+                    "Open a DWG and return documentId. Accepts an absolute path or file:// URI "
+                    "within allowed roots/folders."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Absolute path to a DWG file readable by the server host.",
+                            "description": "Absolute local path to a DWG file.",
                         },
                         "fileUri": {
                             "type": "string",
                             "format": "uri",
-                            "description": "file:// URI to a DWG file readable by the server host.",
+                            "description": "file:// URI to a local DWG file.",
                         },
                     },
                     "oneOf": [
@@ -84,7 +83,7 @@ class DwgMcpApplication:
             ),
             Tool(
                 name="dwg.close_file",
-                description="Close an opened DWG worker and release its documentId.",
+                description="Close a previously opened document and release worker resources.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -99,23 +98,26 @@ class DwgMcpApplication:
             ),
             Tool(
                 name="dwg.list_types",
-                description="List globally supported DWG types, with optional regex filtering and pagination.",
+                description=(
+                    "List globally supported DWG types (not file-specific). Supports regex "
+                    "filtering and cursor pagination."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "regex": {
                             "type": "string",
-                            "description": "Optional regex matched against type names, generic names, and aliases.",
+                            "description": "Optional regex over typeName, genericType, or aliases.",
                         },
                         "limit": {
                             "type": "integer",
                             "minimum": 1,
-                            "description": "Maximum number of results to return.",
+                            "description": "Maximum number of items to return.",
                             "default": 100,
                         },
                         "cursor": {
                             "type": "string",
-                            "description": "Opaque pagination cursor returned by a previous call.",
+                            "description": "Opaque cursor from a previous response.",
                         },
                     },
                     "additionalProperties": False,
@@ -123,7 +125,10 @@ class DwgMcpApplication:
             ),
             Tool(
                 name="dwg.list_file_types",
-                description="List only the types present in a specific opened DWG, with optional regex filtering and pagination.",
+                description=(
+                    "List types present in an opened DWG. Use this after open_file to discover "
+                    "valid typeName values."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -133,17 +138,17 @@ class DwgMcpApplication:
                         },
                         "regex": {
                             "type": "string",
-                            "description": "Optional regex matched against type names, generic names, and aliases.",
+                            "description": "Optional regex over typeName, genericType, or aliases.",
                         },
                         "limit": {
                             "type": "integer",
                             "minimum": 1,
-                            "description": "Maximum number of results to return.",
+                            "description": "Maximum number of items to return.",
                             "default": 100,
                         },
                         "cursor": {
                             "type": "string",
-                            "description": "Opaque pagination cursor returned by a previous call.",
+                            "description": "Opaque cursor from a previous response.",
                         },
                     },
                     "required": ["documentId"],
@@ -153,15 +158,15 @@ class DwgMcpApplication:
             Tool(
                 name="dwg.describe_type",
                 description=(
-                    "Describe a globally supported DWG type, including its dynamically "
-                    "discoverable properties and default projection."
+                    "Describe a supported DWG type, including aliases, properties, and default "
+                    "select fields."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "typeName": {
                             "type": "string",
-                            "description": "Canonical or alias type name to describe.",
+                            "description": "Canonical type name or alias.",
                         }
                     },
                     "required": ["typeName"],
@@ -171,8 +176,8 @@ class DwgMcpApplication:
             Tool(
                 name="dwg.get_objects",
                 description=(
-                    "Fetch specific objects by handle from an opened DWG. Returns items in the "
-                    "same order as the requested handles and reports any missing handles."
+                    "Fetch objects by handle from an opened DWG. Preserves input order and "
+                    "reports missing handles."
                 ),
                 inputSchema={
                     "type": "object",
@@ -194,7 +199,7 @@ class DwgMcpApplication:
                         "select": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional explicit property list to project.",
+                            "description": "Optional property names to include.",
                         },
                     },
                     "required": ["documentId", "handles"],
@@ -203,7 +208,10 @@ class DwgMcpApplication:
             ),
             Tool(
                 name="dwg.query_objects",
-                description="Query objects from an opened DWG using type filters, property filters, scopes, relations, sorting, and pagination.",
+                description=(
+                    "Query objects in an opened DWG using filters, scope, relations, sorting, "
+                    "and pagination."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -323,7 +331,7 @@ class DwgMcpApplication:
             try:
                 opened = await self.session_manager.open_file(str(file_path))
             except WorkerClientError as error:
-                raise ValueError(self._with_access_folders(str(error))) from error
+                raise ValueError(str(error)) from error
             return {
                 "path": str(file_path),
                 "fileUri": file_path.as_uri(),
@@ -411,13 +419,7 @@ class DwgMcpApplication:
             server_name="dwg-mcp-server",
             server_version="0.1.0",
             capabilities=self.server.get_capabilities(NotificationOptions(), {}),
-            instructions=(
-                "Open a DWG file before requesting file-scoped information. "
-                "Use dwg.list_types or dwg.list_file_types to discover valid type names. "
-                "This server can only open files from the configured access folders. "
-                "If the DWG you need is elsewhere, copy or move it into an allowed folder first, "
-                "then call dwg.open_file with the new absolute path."
-            ),
+            instructions=SERVER_INSTRUCTIONS,
         )
 
     def _with_access_folders(self, message: str) -> str:
@@ -426,7 +428,6 @@ class DwgMcpApplication:
             return message
         return (
             f"{message}\n"
-            f"Configured access folders: {format_access_folders(folders)}\n"
-            "To continue, copy or move the DWG into one of those folders and retry "
-            "dwg.open_file with the new absolute path."
+            f"Allowed folders: {format_access_folders(folders)}\n"
+            "Copy the DWG there, or restart with DWG_MCP_HOST_FOLDERS including its folder."
         )
