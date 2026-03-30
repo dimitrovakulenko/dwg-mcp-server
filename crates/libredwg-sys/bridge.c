@@ -465,7 +465,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
     }
 
   if (bridge_type_matches(fp.type, "2RD") || bridge_type_matches(fp.type, "2BD")
-      || bridge_type_matches(fp.type, "2DD"))
+      || bridge_type_matches(fp.type, "2DD")
+      || bridge_type_matches(fp.type, "2DPOINT"))
     {
       dwg_point_2d point;
       if (fp.size != sizeof(point))
@@ -493,7 +494,8 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
 
   if (bridge_type_matches(fp.type, "3BD") || bridge_type_matches(fp.type, "3BD_1")
       || bridge_type_matches(fp.type, "3RD") || bridge_type_matches(fp.type, "3DD")
-      || bridge_type_matches(fp.type, "BE"))
+      || bridge_type_matches(fp.type, "BE")
+      || bridge_type_matches(fp.type, "3DPOINT"))
     {
       dwg_point_3d point;
       if (fp.size != sizeof(point))

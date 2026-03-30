@@ -173,6 +173,47 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(closed["closed"])
 
+    async def test_get_objects_includes_insertion_points(self) -> None:
+        opened = await self.app.call_tool("dwg.open_file", {"path": house_plan()})
+        document_id = opened["documentId"]
+
+        block_reference = await self.app.call_tool(
+            "dwg.get_objects",
+            {
+                "documentId": document_id,
+                "handles": ["2AD"],
+                "projection": "full",
+                "select": ["ins_pt"],
+            },
+        )
+        ins_pt = block_reference["items"][0]["properties"].get("ins_pt")
+        self.assertIsNotNone(ins_pt)
+        self.assertEqual(len(ins_pt), 3)
+
+        text_handle_page = await self.app.call_tool(
+            "dwg.query_objects",
+            {
+                "documentId": document_id,
+                "typeName": "AcDbText",
+                "mode": "handles",
+                "limit": 1,
+            },
+        )
+        self.assertTrue(text_handle_page["handles"])
+
+        text = await self.app.call_tool(
+            "dwg.get_objects",
+            {
+                "documentId": document_id,
+                "handles": [text_handle_page["handles"][0]],
+                "projection": "full",
+                "select": ["ins_pt"],
+            },
+        )
+        text_ins_pt = text["items"][0]["properties"].get("ins_pt")
+        self.assertIsNotNone(text_ins_pt)
+        self.assertEqual(len(text_ins_pt), 2)
+
     async def test_open_file_failure_mentions_configured_access_folders(self) -> None:
         blocked = str(repo_root() / "testData" / "house_plan.dwg")
         with patch.dict(

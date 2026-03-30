@@ -378,6 +378,61 @@ fn house_plan_query_objects_supports_relation_filters() {
 }
 
 #[test]
+fn house_plan_exposes_insertion_points_for_block_references_and_text() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&fixture_path())
+        .expect("fixture should open");
+
+    let block_reference = document
+        .get_objects(GetObjectsRequest {
+            handles: vec!["2AD".to_owned()],
+            projection: Projection::Full,
+            select: Some(vec!["ins_pt".to_owned()]),
+        })
+        .expect("block reference should load");
+    assert!(block_reference.missing_handles.is_empty());
+    let insert_point = block_reference.items[0]
+        .properties
+        .get("ins_pt")
+        .and_then(|value| value.as_array())
+        .expect("block reference ins_pt should be present");
+    assert_eq!(insert_point.len(), 3);
+
+    let first_text = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("AcDbText".to_owned()),
+            generic_type: None,
+            where_clauses: Vec::new(),
+            scope: None,
+            relations: Vec::new(),
+            sort: Vec::new(),
+            mode: QueryMode::Handles,
+            projection: Projection::Summary,
+            select: None,
+            limit: 1,
+            cursor: None,
+        })
+        .expect("text query should work");
+    assert!(!first_text.handles.is_empty());
+
+    let text = document
+        .get_objects(GetObjectsRequest {
+            handles: vec![first_text.handles[0].clone()],
+            projection: Projection::Full,
+            select: Some(vec!["ins_pt".to_owned()]),
+        })
+        .expect("text should load");
+    assert!(text.missing_handles.is_empty());
+    let text_insert_point = text.items[0]
+        .properties
+        .get("ins_pt")
+        .and_then(|value| value.as_array())
+        .expect("text ins_pt should be present");
+    assert_eq!(text_insert_point.len(), 2);
+}
+
+#[test]
 fn supported_types_and_properties_cover_3d_polylines_and_angular_dimensions() {
     let _guard = lock_libredwg();
     let supported = list_supported_types().expect("supported types should parse");
