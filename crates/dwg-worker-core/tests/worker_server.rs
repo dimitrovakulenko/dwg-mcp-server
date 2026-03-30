@@ -249,6 +249,62 @@ fn query_objects_supports_scope_relations_range_filters_and_sorting() {
 }
 
 #[test]
+fn full_projection_suppresses_coordinate_arrays_unless_selected() {
+    let document = IndexedDocument::new(
+        vec![TypeDefinition {
+            type_name: "AcDbPolyline".to_owned(),
+            generic_type: "polyline".to_owned(),
+            description: None,
+            aliases: Vec::new(),
+            default_select: vec!["points".to_owned()],
+            properties: vec![PropertyDefinition {
+                name: "points".to_owned(),
+                value_kind: "array".to_owned(),
+                description: None,
+                queryable: true,
+                reference_target: None,
+            }],
+        }],
+        vec![IndexedObject {
+            handle: "P1".to_owned(),
+            kind: "entity".to_owned(),
+            type_name: "AcDbPolyline".to_owned(),
+            generic_type: "polyline".to_owned(),
+            summary_properties: BTreeMap::new(),
+            full_properties: BTreeMap::from([(
+                String::from("points"),
+                json!([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]]),
+            )]),
+            container_block_handle: None,
+            layout_handle: None,
+            space: None,
+        }],
+    );
+
+    let full_without_select = document
+        .get_objects(GetObjectsRequest {
+            handles: vec!["P1".to_owned()],
+            projection: Projection::Full,
+            select: None,
+        })
+        .expect("full projection should work");
+    assert!(!full_without_select.items.is_empty());
+    assert!(!full_without_select.items[0].properties.contains_key("points"));
+
+    let full_with_select = document
+        .get_objects(GetObjectsRequest {
+            handles: vec!["P1".to_owned()],
+            projection: Projection::Full,
+            select: Some(vec!["points".to_owned()]),
+        })
+        .expect("select projection should work");
+    assert_eq!(
+        full_with_select.items[0].properties.get("points"),
+        Some(&json!([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]]))
+    );
+}
+
+#[test]
 fn list_types_supports_regex_and_pagination() {
     let factory = StaticFactory {
         documents: HashMap::new(),

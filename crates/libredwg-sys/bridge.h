@@ -39,6 +39,8 @@ BITCODE_RLL bridge_dwg_entity_owner_handle(const Dwg_Object *obj);
 bool bridge_dwg_object_read_field(const Dwg_Object *obj,
                                  const char *fieldname,
                                  BridgeDwgFieldValue *out);
+char *bridge_dwg_object_read_field_json(const Dwg_Object *obj,
+                                        const char *fieldname);
 char *bridge_dwg_object_dictionary_items_json (const Dwg_Object *obj);
 char *bridge_dwg_object_dictionary_item_handles_json (const Dwg_Object *obj);
 char *bridge_dwg_object_xrecord_xdata_json (const Dwg_Object *obj);

@@ -201,12 +201,20 @@ impl IndexedObject {
                             .get(property)
                             .or_else(|| self.full_properties.get(property))
                         {
+                            if suppress_by_default(property, value) {
+                                continue;
+                            }
                             properties.insert(property.clone(), value.clone());
                         }
                     }
                 }
                 Projection::Full => {
-                    properties.extend(self.full_properties.clone());
+                    for (property, value) in &self.full_properties {
+                        if suppress_by_default(property, value) {
+                            continue;
+                        }
+                        properties.insert(property.clone(), value.clone());
+                    }
                 }
             }
         }
@@ -219,6 +227,30 @@ impl IndexedObject {
             properties,
         }
     }
+}
+
+fn suppress_by_default(property: &str, value: &Value) -> bool {
+    matches!(property, "points" | "vertices" | "vertex_handles")
+        || is_coordinate_tuple_array(value)
+}
+
+fn is_coordinate_tuple_array(value: &Value) -> bool {
+    let Value::Array(items) = value else {
+        return false;
+    };
+    if items.is_empty() {
+        return false;
+    }
+
+    items.iter().all(is_coordinate_tuple)
+}
+
+fn is_coordinate_tuple(value: &Value) -> bool {
+    let Value::Array(tuple) = value else {
+        return false;
+    };
+
+    (tuple.len() == 2 || tuple.len() == 3) && tuple.iter().all(Value::is_number)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

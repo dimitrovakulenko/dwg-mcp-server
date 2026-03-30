@@ -467,7 +467,18 @@ fn classify_field_kind(raw_kind: &str) -> String {
 }
 
 fn is_queryable_field(field_name: &str, raw_kind: &str) -> bool {
-    field_name != "parent" && !field_name.starts_with("unknown") && !raw_kind.contains('*')
+    if field_name == "parent" || field_name.starts_with("unknown") {
+        return false;
+    }
+
+    if !raw_kind.contains('*') {
+        return true;
+    }
+
+    matches!(
+        raw_kind,
+        "2RD*" | "2BD*" | "2DPOINT*" | "3RD*" | "3BD*" | "3DPOINT*" | "BE*"
+    )
 }
 
 fn merge_properties(
@@ -574,6 +585,28 @@ fn extend_custom_properties(
         });
     }
 
+    if source_name == "POLYLINE_2D"
+        || source_name == "POLYLINE_3D"
+        || matches!(canonical_name, "AcDb2dPolyline" | "AcDb3dPolyline")
+    {
+        push_if_missing(PropertyDefinition {
+            name: "vertices".to_owned(),
+            value_kind: "array".to_owned(),
+            description: Some(
+                "Ordered vertex coordinates resolved from the polyline vertex chain.".to_owned(),
+            ),
+            queryable: false,
+            reference_target: None,
+        });
+        push_if_missing(PropertyDefinition {
+            name: "vertex_handles".to_owned(),
+            value_kind: "array".to_owned(),
+            description: Some("Ordered handles of vertex entities in the polyline chain.".to_owned()),
+            queryable: true,
+            reference_target: Some("handle".to_owned()),
+        });
+    }
+
     properties
 }
 
@@ -594,7 +627,6 @@ fn choose_default_select(property_names: &[String]) -> Vec<String> {
         "base_pt",
         "ins_pt",
         "rotation",
-        "points",
         "color",
         "numitems",
         "item_handles",

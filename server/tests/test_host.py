@@ -214,6 +214,46 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(text_ins_pt)
         self.assertEqual(len(text_ins_pt), 2)
 
+    async def test_get_objects_includes_lwpolyline_points(self) -> None:
+        opened = await self.app.call_tool("dwg.open_file", {"path": house_plan()})
+        document_id = opened["documentId"]
+
+        polyline_handles = await self.app.call_tool(
+            "dwg.query_objects",
+            {
+                "documentId": document_id,
+                "typeName": "AcDbPolyline",
+                "mode": "handles",
+                "limit": 1,
+            },
+        )
+        self.assertTrue(polyline_handles["handles"])
+
+        polyline_without_select = await self.app.call_tool(
+            "dwg.get_objects",
+            {
+                "documentId": document_id,
+                "handles": [polyline_handles["handles"][0]],
+                "projection": "full",
+            },
+        )
+        self.assertNotIn("points", polyline_without_select["items"][0]["properties"])
+
+        polyline = await self.app.call_tool(
+            "dwg.get_objects",
+            {
+                "documentId": document_id,
+                "handles": [polyline_handles["handles"][0]],
+                "projection": "full",
+                "select": ["num_points", "points"],
+            },
+        )
+        properties = polyline["items"][0]["properties"]
+        self.assertIn("points", properties)
+        self.assertIn("num_points", properties)
+        self.assertEqual(len(properties["points"]), properties["num_points"])
+        self.assertTrue(all(len(point) == 2 for point in properties["points"]))
+
     async def test_open_file_failure_mentions_configured_access_folders(self) -> None:
         blocked = str(repo_root() / "testData" / "house_plan.dwg")
         with patch.dict(

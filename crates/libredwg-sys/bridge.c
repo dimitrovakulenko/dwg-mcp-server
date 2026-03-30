@@ -85,6 +85,13 @@ static bool bridge_json_append_hex_string (BridgeJsonBuffer *buffer,
                                           size_t length);
 static bool bridge_json_append_resbuf_value (BridgeJsonBuffer *buffer,
                                             const Dwg_Resbuf *rbuf);
+static bool bridge_type_is_point_array (const char *type);
+static bool bridge_try_read_count_field (const Dwg_Object *obj,
+                                        const char *count_field,
+                                        BITCODE_BL *out_count);
+static bool bridge_read_array_count (const Dwg_Object *obj,
+                                    const char *fieldname,
+                                    BITCODE_BL *out_count);
 
 bool
 bridge_dwg_object_is_entity(const Dwg_Object *obj)
@@ -596,6 +603,191 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
     }
 
   return false;
+}
+
+static bool
+bridge_type_is_point_array (const char *type)
+{
+  return bridge_type_matches (type, "2RD*") || bridge_type_matches (type, "2BD*")
+         || bridge_type_matches (type, "2DPOINT*")
+         || bridge_type_matches (type, "3RD*")
+         || bridge_type_matches (type, "3BD*")
+         || bridge_type_matches (type, "3DPOINT*")
+         || bridge_type_matches (type, "BE*");
+}
+
+static bool
+bridge_try_read_count_field (const Dwg_Object *obj, const char *count_field,
+                            BITCODE_BL *out_count)
+{
+  BridgeDwgFieldValue value;
+  long long candidate = 0;
+  bool ok = false;
+
+  if (!obj || !count_field || !out_count)
+    return false;
+
+  if (!bridge_dwg_object_read_field (obj, count_field, &value))
+    return false;
+
+  switch (value.kind)
+    {
+    case BRIDGE_DWG_FIELD_INTEGER:
+      candidate = value.integer_value;
+      ok = true;
+      break;
+    case BRIDGE_DWG_FIELD_DOUBLE:
+      candidate = (long long)value.double_value;
+      ok = true;
+      break;
+    case BRIDGE_DWG_FIELD_BOOL:
+      candidate = value.integer_value ? 1 : 0;
+      ok = true;
+      break;
+    default:
+      break;
+    }
+  bridge_dwg_field_value_free (&value);
+
+  if (!ok || candidate < 0)
+    return false;
+
+  *out_count = (BITCODE_BL)candidate;
+  return true;
+}
+
+static bool
+bridge_read_array_count (const Dwg_Object *obj, const char *fieldname,
+                        BITCODE_BL *out_count)
+{
+  char candidate[128];
+  size_t length;
+
+  if (!obj || !fieldname || !out_count)
+    return false;
+
+  if (snprintf (candidate, sizeof (candidate), "num_%s", fieldname) > 0
+      && bridge_try_read_count_field (obj, candidate, out_count))
+    return true;
+
+  length = strlen (fieldname);
+  if (length > 1 && fieldname[length - 1] == 's'
+      && snprintf (candidate, sizeof (candidate), "num_%.*s",
+                   (int)(length - 1), fieldname) > 0
+      && bridge_try_read_count_field (obj, candidate, out_count))
+    return true;
+
+  if (strcmp (fieldname, "vertex") == 0
+      && (bridge_try_read_count_field (obj, "num_vertex", out_count)
+          || bridge_try_read_count_field (obj, "num_owned", out_count)))
+    return true;
+
+  if (strcmp (fieldname, "verts") == 0
+      && bridge_try_read_count_field (obj, "num_verts", out_count))
+    return true;
+
+  return false;
+}
+
+char *
+bridge_dwg_object_read_field_json (const Dwg_Object *obj, const char *fieldname)
+{
+  Dwg_DYNAPI_field fp;
+  const Dwg_DYNAPI_field *field;
+  bool is_common;
+  BITCODE_BL count = 0;
+  void *values = NULL;
+  BridgeJsonBuffer buffer = { 0 };
+
+  if (!obj || !fieldname)
+    return NULL;
+
+  field = bridge_dwg_common_field (obj, fieldname);
+  is_common = field != NULL;
+  if (!field)
+    {
+      field = dwg_dynapi_entity_field (obj->name, fieldname);
+      if (!field)
+        return NULL;
+    }
+  memcpy (&fp, field, sizeof (fp));
+
+  if (!strchr (fp.type, '*') || !bridge_type_is_point_array (fp.type))
+    return NULL;
+
+  if (!bridge_read_array_count (obj, fieldname, &count))
+    return NULL;
+
+  if (count == 0)
+    return strdup ("[]");
+
+  if (fp.size != sizeof (values))
+    return NULL;
+  if (!bridge_read_raw_field (obj, fieldname, is_common, &values, &fp) || !values)
+    return NULL;
+
+  if (!bridge_json_buffer_append_char (&buffer, '['))
+    goto failed;
+
+  for (BITCODE_BL index = 0; index < count; index++)
+    {
+      double x = 0.0;
+      double y = 0.0;
+      double z = 0.0;
+      bool is_3d = false;
+
+      if (bridge_type_matches (fp.type, "2RD*"))
+        {
+          BITCODE_2RD *items = (BITCODE_2RD *)values;
+          x = items[index].x;
+          y = items[index].y;
+        }
+      else if (bridge_type_matches (fp.type, "2BD*")
+               || bridge_type_matches (fp.type, "2DPOINT*"))
+        {
+          BITCODE_2BD *items = (BITCODE_2BD *)values;
+          x = items[index].x;
+          y = items[index].y;
+        }
+      else if (bridge_type_matches (fp.type, "3RD*"))
+        {
+          BITCODE_3RD *items = (BITCODE_3RD *)values;
+          x = items[index].x;
+          y = items[index].y;
+          z = items[index].z;
+          is_3d = true;
+        }
+      else if (bridge_type_matches (fp.type, "3BD*")
+               || bridge_type_matches (fp.type, "3DPOINT*")
+               || bridge_type_matches (fp.type, "BE*"))
+        {
+          BITCODE_3BD *items = (BITCODE_3BD *)values;
+          x = items[index].x;
+          y = items[index].y;
+          z = items[index].z;
+          is_3d = true;
+        }
+      else
+        goto failed;
+
+      if (index > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+        goto failed;
+      if (is_3d)
+        {
+          if (!bridge_json_buffer_appendf (&buffer, "[%.17g,%.17g,%.17g]", x, y, z))
+            goto failed;
+        }
+      else if (!bridge_json_buffer_appendf (&buffer, "[%.17g,%.17g]", x, y))
+        goto failed;
+    }
+
+  if (!bridge_json_buffer_append_char (&buffer, ']'))
+    goto failed;
+  return buffer.data;
+
+failed:
+  free (buffer.data);
+  return NULL;
 }
 
 char *

@@ -1,6 +1,6 @@
 mod schema;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::Path;
@@ -145,6 +145,7 @@ fn build_indexed_document(native: &NativeDocument) -> Result<IndexedDocument, Wo
     }
 
     augment_dynamic_block_history_properties(&mut indexed_objects);
+    augment_polyline_vertex_properties(&mut indexed_objects);
 
     for indexed in &indexed_objects {
         type_properties
@@ -257,6 +258,89 @@ fn augment_dynamic_block_history_properties(objects: &mut [IndexedObject]) {
 
         if !derived.is_empty() {
             updates.push((index, derived));
+        }
+    }
+
+    for (index, derived) in updates {
+        if let Some(object) = objects.get_mut(index) {
+            for (name, value) in derived {
+                object.full_properties.insert(name, value);
+            }
+            object.summary_properties = select_summary_properties(&object.full_properties);
+        }
+    }
+}
+
+#[cfg(feature = "native")]
+fn augment_polyline_vertex_properties(objects: &mut [IndexedObject]) {
+    let indices_by_handle = objects
+        .iter()
+        .enumerate()
+        .map(|(index, object)| (object.handle.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let mut updates = Vec::<(usize, Vec<(String, Value)>)>::new();
+
+    for (index, object) in objects.iter().enumerate() {
+        if !matches!(object.type_name.as_str(), "AcDb2dPolyline" | "AcDb3dPolyline") {
+            continue;
+        }
+
+        let Some(first_vertex_handle) = property_string(object, "first_vertex") else {
+            continue;
+        };
+        let last_vertex_handle = property_string(object, "last_vertex");
+
+        let mut current_vertex_handle = Some(first_vertex_handle.to_owned());
+        let mut visited = HashSet::new();
+        let mut vertex_handles = Vec::new();
+        let mut vertices = Vec::new();
+
+        while let Some(handle) = current_vertex_handle.take() {
+            if !visited.insert(handle.clone()) {
+                break;
+            }
+
+            let Some(vertex) = object_by_handle(objects, &indices_by_handle, &handle) else {
+                break;
+            };
+
+            if vertex.type_name == "SEQEND" {
+                break;
+            }
+
+            if property_string(vertex, "ownerhandle") != Some(object.handle.as_str()) {
+                break;
+            }
+
+            if let Some(point) = vertex.value_for_property("point") {
+                vertices.push(point.clone());
+            }
+            vertex_handles.push(handle.clone());
+
+            if Some(handle.as_str()) == last_vertex_handle {
+                break;
+            }
+
+            current_vertex_handle = property_string(vertex, "next_entity").and_then(|next| {
+                if next.is_empty() || next == "0" {
+                    None
+                } else {
+                    Some(next.to_owned())
+                }
+            });
+        }
+
+        if !vertices.is_empty() {
+            updates.push((
+                index,
+                vec![
+                    ("vertices".to_owned(), Value::Array(vertices)),
+                    (
+                        "vertex_handles".to_owned(),
+                        Value::Array(vertex_handles.into_iter().map(Value::String).collect()),
+                    ),
+                ],
+            ));
         }
     }
 
@@ -416,16 +500,27 @@ unsafe fn read_field_value(
     let ok = unsafe {
         libredwg_sys::bridge_dwg_object_read_field(object, c_field.as_ptr(), raw.as_mut_ptr())
     };
-    if !ok {
+    if ok {
+        let mut raw = unsafe { raw.assume_init() };
+        let value = bridge_field_value_to_json(&raw);
+        unsafe {
+            libredwg_sys::bridge_dwg_field_value_free(&mut raw);
+        }
+        if value.is_some() {
+            return value;
+        }
+    }
+
+    let raw = unsafe { libredwg_sys::bridge_dwg_object_read_field_json(object, c_field.as_ptr()) };
+    if raw.is_null() {
         return None;
     }
 
-    let mut raw = unsafe { raw.assume_init() };
-    let value = bridge_field_value_to_json(&raw);
+    let text = unsafe { CStr::from_ptr(raw) }.to_string_lossy().into_owned();
     unsafe {
-        libredwg_sys::bridge_dwg_field_value_free(&mut raw);
+        libredwg_sys::bridge_dwg_string_free(raw);
     }
-    value
+    serde_json::from_str(&text).ok()
 }
 
 #[cfg(feature = "native")]
@@ -564,4 +659,78 @@ fn property_handle_array(object: &IndexedObject, property: &str) -> Vec<String> 
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+#[cfg(all(test, feature = "native"))]
+mod tests {
+    use super::augment_polyline_vertex_properties;
+    use dwg_worker_core::IndexedObject;
+    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+
+    fn object(
+        handle: &str,
+        type_name: &str,
+        properties: impl IntoIterator<Item = (&'static str, Value)>,
+    ) -> IndexedObject {
+        IndexedObject {
+            handle: handle.to_owned(),
+            kind: "entity".to_owned(),
+            type_name: type_name.to_owned(),
+            generic_type: String::new(),
+            summary_properties: BTreeMap::new(),
+            full_properties: properties
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value))
+                .collect(),
+            container_block_handle: None,
+            layout_handle: None,
+            space: None,
+        }
+    }
+
+    #[test]
+    fn augment_polyline_vertex_properties_builds_vertices_for_3d_polylines() {
+        let mut objects = vec![
+            object(
+                "P1",
+                "AcDb3dPolyline",
+                [
+                    ("first_vertex", json!("V1")),
+                    ("last_vertex", json!("V2")),
+                ],
+            ),
+            object(
+                "V1",
+                "AcDb3dPolylineVertex",
+                [
+                    ("ownerhandle", json!("P1")),
+                    ("next_entity", json!("V2")),
+                    ("point", json!([1.0, 2.0, 3.0])),
+                ],
+            ),
+            object(
+                "V2",
+                "AcDb3dPolylineVertex",
+                [
+                    ("ownerhandle", json!("P1")),
+                    ("next_entity", json!("S1")),
+                    ("point", json!([4.0, 5.0, 6.0])),
+                ],
+            ),
+            object("S1", "SEQEND", [("ownerhandle", json!("P1"))]),
+        ];
+
+        augment_polyline_vertex_properties(&mut objects);
+
+        let polyline = &objects[0];
+        assert_eq!(
+            polyline.full_properties.get("vertex_handles"),
+            Some(&json!(["V1", "V2"]))
+        );
+        assert_eq!(
+            polyline.full_properties.get("vertices"),
+            Some(&json!([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
+        );
+    }
 }

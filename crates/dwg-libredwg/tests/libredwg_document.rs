@@ -433,6 +433,66 @@ fn house_plan_exposes_insertion_points_for_block_references_and_text() {
 }
 
 #[test]
+fn house_plan_exposes_lwpolyline_points_arrays() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&fixture_path())
+        .expect("fixture should open");
+
+    let first_polyline = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("AcDbPolyline".to_owned()),
+            generic_type: None,
+            where_clauses: Vec::new(),
+            scope: None,
+            relations: Vec::new(),
+            sort: Vec::new(),
+            mode: QueryMode::Handles,
+            projection: Projection::Summary,
+            select: None,
+            limit: 1,
+            cursor: None,
+        })
+        .expect("polyline query should work");
+    assert!(!first_polyline.handles.is_empty());
+
+    let polyline = document
+        .get_objects(GetObjectsRequest {
+            handles: vec![first_polyline.handles[0].clone()],
+            projection: Projection::Full,
+            select: None,
+        })
+        .expect("polyline should load in full mode");
+    assert!(polyline.missing_handles.is_empty());
+    assert!(!polyline.items[0].properties.contains_key("points"));
+
+    let polyline = document
+        .get_objects(GetObjectsRequest {
+            handles: vec![first_polyline.handles[0].clone()],
+            projection: Projection::Full,
+            select: Some(vec!["num_points".to_owned(), "points".to_owned()]),
+        })
+        .expect("polyline should load");
+    assert!(polyline.missing_handles.is_empty());
+
+    let properties = &polyline.items[0].properties;
+    let points = properties
+        .get("points")
+        .and_then(|value| value.as_array())
+        .expect("polyline points should be present");
+    let num_points = properties
+        .get("num_points")
+        .and_then(|value| value.as_i64())
+        .expect("polyline num_points should be present");
+    assert_eq!(points.len(), num_points as usize);
+    assert!(
+        points
+            .iter()
+            .all(|point| point.as_array().map(|item| item.len() == 2).unwrap_or(false))
+    );
+}
+
+#[test]
 fn supported_types_and_properties_cover_3d_polylines_and_angular_dimensions() {
     let _guard = lock_libredwg();
     let supported = list_supported_types().expect("supported types should parse");
