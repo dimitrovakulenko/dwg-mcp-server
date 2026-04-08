@@ -341,3 +341,53 @@ class McpStdioTests(unittest.TestCase):
                 "arguments": {"documentId": document_id},
             },
         )
+
+    def test_full_object_queries_include_extended_data_via_mcp(self) -> None:
+        self.client.initialize()
+
+        opened = self.client.request(
+            "tools/call",
+            {
+                "name": "dwg.open_file",
+                "arguments": {"fileUri": house_plan_uri()},
+            },
+        )
+        document_id = opened["result"]["structuredContent"]["documentId"]
+
+        queried = self.client.request(
+            "tools/call",
+            {
+                "name": "dwg.query_objects",
+                "arguments": {
+                    "documentId": document_id,
+                    "typeName": "AcDbText",
+                    "scope": {"space": "modelSpace"},
+                    "mode": "full",
+                    "limit": 1,
+                },
+            },
+        )["result"]["structuredContent"]
+        self.assertTrue(queried["items"])
+        self.assertEqual(queried["items"][0]["extendedData"]["space"], "modelSpace")
+        self.assertIn("containerBlockHandle", queried["items"][0]["extendedData"])
+
+        fetched = self.client.request(
+            "tools/call",
+            {
+                "name": "dwg.get_objects",
+                "arguments": {
+                    "documentId": document_id,
+                    "handles": [queried["items"][0]["handle"]],
+                    "projection": "full",
+                },
+            },
+        )["result"]["structuredContent"]
+        self.assertEqual(fetched["items"][0]["extendedData"]["space"], "modelSpace")
+
+        self.client.request(
+            "tools/call",
+            {
+                "name": "dwg.close_file",
+                "arguments": {"documentId": document_id},
+            },
+        )

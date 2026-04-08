@@ -164,6 +164,7 @@ fn get_objects_preserves_order_and_reports_missing_handles() {
     assert_eq!(result.items[0].handle, "15002");
     assert_eq!(result.items[1].handle, "728");
     assert_eq!(result.missing_handles, vec!["missing"]);
+    assert!(result.items[0].extended_data.is_none());
 }
 
 #[test]
@@ -246,6 +247,57 @@ fn query_objects_supports_scope_relations_range_filters_and_sorting() {
 
     assert_eq!(result.total, 1);
     assert_eq!(result.items[0].handle, "15002");
+    assert!(result.items[0].extended_data.is_none());
+}
+
+#[test]
+fn full_queries_include_extended_object_data() {
+    let document = sample_document();
+
+    let fetched = document
+        .get_objects(GetObjectsRequest {
+            handles: vec!["15001".to_owned()],
+            projection: Projection::Full,
+            select: None,
+        })
+        .expect("full get_objects should work");
+    assert_eq!(
+        fetched.items[0].extended_data,
+        Some(dwg_worker_core::ObjectExtendedData {
+            container_block_handle: Some("MODEL".to_owned()),
+            layout_handle: None,
+            space: None,
+        })
+    );
+
+    let queried = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("AcDbBlockReference".to_owned()),
+            generic_type: None,
+            where_clauses: vec![PropertyFilter {
+                property: "handle".to_owned(),
+                op: dwg_worker_core::FilterOperator::Eq,
+                value: Some(json!("15001")),
+                values: Vec::new(),
+            }],
+            scope: None,
+            relations: Vec::new(),
+            sort: Vec::new(),
+            mode: QueryMode::Full,
+            projection: Projection::Summary,
+            select: None,
+            limit: 1,
+            cursor: None,
+        })
+        .expect("full query_objects should work");
+    assert_eq!(
+        queried.items[0].extended_data,
+        Some(dwg_worker_core::ObjectExtendedData {
+            container_block_handle: Some("MODEL".to_owned()),
+            layout_handle: None,
+            space: None,
+        })
+    );
 }
 
 #[test]

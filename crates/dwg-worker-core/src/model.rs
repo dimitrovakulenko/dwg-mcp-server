@@ -139,6 +139,19 @@ pub struct ObjectRecord {
     pub generic_type: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub properties: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extended_data: Option<ObjectExtendedData>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectExtendedData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_block_handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<QuerySpace>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -225,6 +238,28 @@ impl IndexedObject {
             type_name: self.type_name.clone(),
             generic_type: self.generic_type.clone(),
             properties,
+            extended_data: self.extended_data_for_projection(projection),
+        }
+    }
+
+    fn extended_data_for_projection(&self, projection: Projection) -> Option<ObjectExtendedData> {
+        if projection != Projection::Full {
+            return None;
+        }
+
+        let extended_data = ObjectExtendedData {
+            container_block_handle: self.container_block_handle.clone(),
+            layout_handle: self.layout_handle.clone(),
+            space: self.space,
+        };
+
+        if extended_data.container_block_handle.is_none()
+            && extended_data.layout_handle.is_none()
+            && extended_data.space.is_none()
+        {
+            None
+        } else {
+            Some(extended_data)
         }
     }
 }

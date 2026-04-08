@@ -6,9 +6,9 @@ mod stdio_handler;
 pub use backend::{BackendFactory, DwgDocument, IndexedDocument, WorkerError};
 pub use model::{
     FilterOperator, GetObjectsRequest, GetObjectsResult, IndexedObject, ObjectRecord, Projection,
-    PropertyDefinition, PropertyFilter, QueryMode, QueryObjectsRequest, QueryObjectsResult,
-    QueryScope, QuerySpace, RelationDirection, RelationFilter, SortDirection, SortSpec,
-    TypeDefinition,
+    ObjectExtendedData, PropertyDefinition, PropertyFilter, QueryMode, QueryObjectsRequest,
+    QueryObjectsResult, QueryScope, QuerySpace, RelationDirection, RelationFilter, SortDirection,
+    SortSpec, TypeDefinition,
 };
 pub use protocol::{
     CloseFileResult, DescribeTypeParams, GetObjectsParams, HealthResult, ListFileTypesResult,

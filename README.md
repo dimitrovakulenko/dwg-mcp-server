@@ -171,3 +171,5 @@ bash scripts/clean-build-artifacts.sh --with-libredwg
 
 This project is licensed under the GNU General Public License v3.0.
 See `LICENSE` for the full license text.
+
+When you request full object records, responses also include that derived membership under `extendedData`, including container block, layout, and model or paper space when known.

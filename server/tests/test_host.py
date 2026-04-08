@@ -254,6 +254,38 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(properties["points"]), properties["num_points"])
         self.assertTrue(all(len(point) == 2 for point in properties["points"]))
 
+    async def test_full_object_queries_include_extended_data(self) -> None:
+        opened = await self.app.call_tool("dwg.open_file", {"path": house_plan()})
+        document_id = opened["documentId"]
+
+        queried = await self.app.call_tool(
+            "dwg.query_objects",
+            {
+                "documentId": document_id,
+                "typeName": "AcDbText",
+                "scope": {"space": "modelSpace"},
+                "mode": "full",
+                "limit": 1,
+            },
+        )
+        self.assertTrue(queried["items"])
+        extended_data = queried["items"][0]["extendedData"]
+        self.assertEqual(extended_data["space"], "modelSpace")
+        self.assertIn("containerBlockHandle", extended_data)
+
+        fetched = await self.app.call_tool(
+            "dwg.get_objects",
+            {
+                "documentId": document_id,
+                "handles": [queried["items"][0]["handle"]],
+                "projection": "full",
+            },
+        )
+        self.assertEqual(
+            fetched["items"][0]["extendedData"]["space"],
+            "modelSpace",
+        )
+
     async def test_open_file_failure_mentions_configured_access_folders(self) -> None:
         blocked = str(repo_root() / "testData" / "house_plan.dwg")
         with patch.dict(
