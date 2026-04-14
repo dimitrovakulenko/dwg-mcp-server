@@ -46,4 +46,6 @@ DOCKER_ARGS+=("${MOUNTS[@]}")
 DOCKER_ARGS+=("$IMAGE")
 DOCKER_ARGS+=("$@")
 
+docker pull --platform linux/amd64 "$IMAGE" >/dev/null
+
 exec docker "${DOCKER_ARGS[@]}"

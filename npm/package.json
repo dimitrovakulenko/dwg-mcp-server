@@ -1,6 +1,6 @@
 {
   "name": "@dmytro-prototypes/dwg-mcp-server",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Run DWG MCP server via Docker",
   "type": "module",
   "bin": {

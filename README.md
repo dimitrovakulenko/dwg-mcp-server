@@ -17,6 +17,12 @@ codex mcp add dwg-mcp \
   -- npx -y @dmytro-prototypes/dwg-mcp-server
 ```
 
+or simply 
+
+```bash
+codex mcp add dwg-mcp -- npx -y @dmytro-prototypes/dwg-mcp-server
+```
+
 ### Claude
 
 ```bash
@@ -80,6 +86,8 @@ That upfront indexing step is central to the design: the server pays the cost on
 
 The indexed model stores object handles, kinds, type names, generic types, summary and full properties, and derived block, layout, and space membership.
 It also stores supported type metadata such as aliases, default projections, and property definitions.
+
+When you request full object records, responses also include that derived membership under `extendedData`, including container block, layout, and model or paper space when known.
 
 `dwg.get_objects` is direct lookup by handle.
 `dwg.query_objects` runs over indices for handle, type, generic type, kind, exact property values, block, layout, and space, then applies filters, scopes, relation traversal, sorting, projection, and pagination.
@@ -151,7 +159,7 @@ DWG_MCP_HOST_FOLDERS="$HOME/Documents;$HOME/Desktop/dwg" \
 bash scripts/run-docker-mcp-server.sh
 ```
 
-By default, the Docker launcher exposes the current working directory.
+By default, the Docker launcher exposes `~/Documents`.
 
 ### Clean rebuild
 
@@ -171,5 +179,3 @@ bash scripts/clean-build-artifacts.sh --with-libredwg
 
 This project is licensed under the GNU General Public License v3.0.
 See `LICENSE` for the full license text.
-
-When you request full object records, responses also include that derived membership under `extendedData`, including container block, layout, and model or paper space when known.
