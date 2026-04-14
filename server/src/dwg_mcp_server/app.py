@@ -74,10 +74,6 @@ class DwgMcpApplication:
                             "description": "file:// URI to a local DWG file.",
                         },
                     },
-                    "oneOf": [
-                        {"required": ["path"]},
-                        {"required": ["fileUri"]},
-                    ],
                     "additionalProperties": False,
                 },
             ),
