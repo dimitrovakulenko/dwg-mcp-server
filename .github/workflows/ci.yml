@@ -49,32 +49,43 @@ jobs:
         id: libredwg-cache-restore
         uses: actions/cache/restore@v4
         with:
-          path: |
-            third_party/libredwg/src/.libs
-            third_party/libredwg/src/config.h
-          key: libredwg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.libredwg-rev.outputs.rev }}-${{ hashFiles('scripts/build-libredwg.sh') }}
+          path: .cache/libredwg-root
+          key: libredwg-root-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.libredwg-rev.outputs.rev }}-${{ hashFiles('scripts/build-libredwg.sh') }}
 
       - name: Build LibreDWG (third_party)
+        env:
+          LIBREDWG_CACHE_ROOT: ${{ github.workspace }}/.cache/libredwg-root
         run: |
-          if [ -f third_party/libredwg/src/.libs/libredwg.a ] && [ -f third_party/libredwg/src/config.h ]; then
-            echo "Using cached LibreDWG build"
+          set -euo pipefail
+
+          if [ -f "$LIBREDWG_CACHE_ROOT/src/.libs/libredwg.a" ] && \
+             [ -f "$LIBREDWG_CACHE_ROOT/src/config.h" ] && \
+             [ -f "$LIBREDWG_CACHE_ROOT/include/dwg_api.h" ]; then
+            echo "Using cached LibreDWG build at $LIBREDWG_CACHE_ROOT"
           else
             bash scripts/build-libredwg.sh
+            rm -rf "$LIBREDWG_CACHE_ROOT"
+            mkdir -p "$LIBREDWG_CACHE_ROOT/src/.libs" "$LIBREDWG_CACHE_ROOT/include"
+            cp third_party/libredwg/src/.libs/libredwg.a "$LIBREDWG_CACHE_ROOT/src/.libs/"
+            cp third_party/libredwg/src/*.h "$LIBREDWG_CACHE_ROOT/src/"
+            cp third_party/libredwg/include/*.h "$LIBREDWG_CACHE_ROOT/include/"
           fi
 
       - name: Save LibreDWG build cache
-        if: ${{ steps.libredwg-cache-restore.outputs.cache-hit != 'true' && hashFiles('third_party/libredwg/src/.libs/libredwg.a', 'third_party/libredwg/src/config.h') != '' }}
+        if: ${{ steps.libredwg-cache-restore.outputs.cache-hit != 'true' && hashFiles('.cache/libredwg-root/src/.libs/libredwg.a', '.cache/libredwg-root/src/config.h', '.cache/libredwg-root/include/dwg_api.h') != '' }}
         uses: actions/cache/save@v4
         with:
-          path: |
-            third_party/libredwg/src/.libs
-            third_party/libredwg/src/config.h
+          path: .cache/libredwg-root
           key: ${{ steps.libredwg-cache-restore.outputs.cache-primary-key }}
 
       - name: Cargo test (workspace)
+        env:
+          LIBREDWG_ROOT_DIR: ${{ github.workspace }}/.cache/libredwg-root
         run: cargo test --workspace
 
       - name: Build dwg-worker binary for Python tests
+        env:
+          LIBREDWG_ROOT_DIR: ${{ github.workspace }}/.cache/libredwg-root
         run: cargo build -p dwg-worker
 
       - name: Set up Python
