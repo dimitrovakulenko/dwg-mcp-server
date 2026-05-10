@@ -64,6 +64,8 @@ RUN cargo build -p dwg-worker --release \
 # -----------------------------------------------------------------------------
 FROM python:3.13-slim AS runtime
 
+LABEL io.modelcontextprotocol.server.name="io.github.dimitrovakulenko/dwg-mcp-server"
+
 ENV PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \

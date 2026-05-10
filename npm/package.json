@@ -1,8 +1,26 @@
 {
   "name": "@dmytro-prototypes/dwg-mcp-server",
   "version": "0.1.4",
+  "mcpName": "io.github.dimitrovakulenko/dwg-mcp-server",
   "description": "Run DWG MCP server via Docker",
   "type": "module",
+  "license": "GPL-3.0-or-later",
+  "homepage": "https://github.com/dimitrovakulenko/dwg-mcp-server#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dimitrovakulenko/dwg-mcp-server.git",
+    "directory": "npm"
+  },
+  "bugs": {
+    "url": "https://github.com/dimitrovakulenko/dwg-mcp-server/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "dwg",
+    "autocad",
+    "cad"
+  ],
   "bin": {
     "dwg-mcp-server": "./bin/cli.js"
   },

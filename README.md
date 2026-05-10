@@ -175,6 +175,25 @@ To also wipe the host LibreDWG build under `third_party/libredwg`:
 bash scripts/clean-build-artifacts.sh --with-libredwg
 ```
 
+## Official MCP Registry
+
+Registry metadata lives in `server.json` under the GitHub-authenticated name
+`io.github.dimitrovakulenko/dwg-mcp-server`.
+
+Before publishing a new registry version:
+
+1. Publish the matching npm package version from `npm/`.
+2. Confirm `npm/package.json` contains the same `mcpName` as `server.json`.
+3. Run the manual `Publish MCP Registry` GitHub Actions workflow, or run:
+
+```bash
+mcp-publisher login github
+mcp-publisher publish
+```
+
+The registry validates the published npm package, so `server.json` must point to
+an npm version that already exists on the public npm registry.
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0.
