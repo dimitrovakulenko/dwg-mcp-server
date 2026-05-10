@@ -1,6 +1,7 @@
 #include "bridge.h"
 
 #include <bits.h>
+#include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -80,11 +81,32 @@ static const Dwg_Object_DICTIONARYWDFLT *
 bridge_dwg_dictionarywdflt_ptr (const Dwg_Object *obj);
 static const Dwg_Object_XRECORD *
 bridge_dwg_xrecord_ptr (const Dwg_Object *obj);
+static const Dwg_Entity_HATCH *
+bridge_dwg_hatch_ptr (const Dwg_Object *obj);
 static bool bridge_json_append_hex_string (BridgeJsonBuffer *buffer,
                                           const unsigned char *bytes,
                                           size_t length);
 static bool bridge_json_append_resbuf_value (BridgeJsonBuffer *buffer,
                                             const Dwg_Resbuf *rbuf);
+static bool bridge_json_append_point2d_values (BridgeJsonBuffer *buffer,
+                                               double x, double y);
+static bool bridge_json_append_point2rd (BridgeJsonBuffer *buffer,
+                                         BITCODE_2RD point);
+static bool bridge_json_append_hatch_boundary_handles (
+    BridgeJsonBuffer *buffer, const Dwg_Object *obj, BITCODE_H *handles,
+    BITCODE_BL count);
+static bool bridge_json_append_hatch_segment (BridgeJsonBuffer *buffer,
+                                              const Dwg_HATCH_PathSeg *segment);
+static bool bridge_json_append_hatch_segments (BridgeJsonBuffer *buffer,
+                                               const Dwg_HATCH_Path *path);
+static bool bridge_json_append_hatch_polyline_points (
+    BridgeJsonBuffer *buffer, const Dwg_HATCH_Path *path);
+static bool bridge_json_append_hatch_polyline_bulges (
+    BridgeJsonBuffer *buffer, const Dwg_HATCH_Path *path);
+static bool bridge_json_append_hatch_contour (BridgeJsonBuffer *buffer,
+                                              const Dwg_Object *obj,
+                                              const Dwg_HATCH_Path *path,
+                                              BITCODE_BL index);
 static bool bridge_type_is_point_array (const char *type);
 static bool bridge_try_read_count_field (const Dwg_Object *obj,
                                         const char *count_field,
@@ -313,6 +335,15 @@ bridge_dwg_evaluation_graph_ptr (const Dwg_Object *obj)
       || strcmp (obj->name, "EVALUATION_GRAPH") != 0)
     return NULL;
   return (const Dwg_Object_EVALUATION_GRAPH *)bridge_dwg_object_specific_ptr (obj);
+}
+
+static const Dwg_Entity_HATCH *
+bridge_dwg_hatch_ptr (const Dwg_Object *obj)
+{
+  if (!obj || obj->supertype != DWG_SUPERTYPE_ENTITY || !obj->name
+      || strcmp (obj->name, "HATCH") != 0)
+    return NULL;
+  return (const Dwg_Entity_HATCH *)bridge_dwg_object_specific_ptr (obj);
 }
 
 static const Dwg_DYNAPI_field *
@@ -966,6 +997,291 @@ bridge_json_append_resbuf_value (BridgeJsonBuffer *buffer, const Dwg_Resbuf *rbu
     }
 }
 
+static bool
+bridge_json_append_point2d_values (BridgeJsonBuffer *buffer, double x, double y)
+{
+  return bridge_json_buffer_appendf (buffer, "[%.17g,%.17g]", x, y);
+}
+
+static bool
+bridge_json_append_point2rd (BridgeJsonBuffer *buffer, BITCODE_2RD point)
+{
+  return bridge_json_append_point2d_values (buffer, point.x, point.y);
+}
+
+static bool
+bridge_json_append_hatch_boundary_handles (BridgeJsonBuffer *buffer,
+                                          const Dwg_Object *obj,
+                                          BITCODE_H *handles,
+                                          BITCODE_BL count)
+{
+  if (!bridge_json_buffer_append_char (buffer, '['))
+    return false;
+
+  for (BITCODE_BL index = 0; index < count; index++)
+    {
+      BITCODE_RLL handle_value = 0;
+
+      if (index > 0 && !bridge_json_buffer_append_char (buffer, ','))
+        return false;
+      if (handles)
+        bridge_try_get_handle_value (obj, handles[index], &handle_value);
+      if (!bridge_json_buffer_appendf (buffer, "\"%llX\"",
+                                      (unsigned long long)handle_value))
+        return false;
+    }
+
+  return bridge_json_buffer_append_char (buffer, ']');
+}
+
+static bool
+bridge_json_append_hatch_segment (BridgeJsonBuffer *buffer,
+                                 const Dwg_HATCH_PathSeg *segment)
+{
+  double start_x, start_y, end_x, end_y;
+
+  if (!buffer || !segment || !bridge_json_buffer_append_char (buffer, '{'))
+    return false;
+
+  switch (segment->curve_type)
+    {
+    case 1:
+      if (!bridge_json_buffer_append_cstr (buffer, "\"type\":\"line\",\"points\":[")
+          || !bridge_json_append_point2rd (buffer, segment->first_endpoint)
+          || !bridge_json_buffer_append_char (buffer, ',')
+          || !bridge_json_append_point2rd (buffer, segment->second_endpoint)
+          || !bridge_json_buffer_append_char (buffer, ']'))
+        return false;
+      break;
+    case 2:
+      start_x = segment->center.x + segment->radius * cos (segment->start_angle);
+      start_y = segment->center.y + segment->radius * sin (segment->start_angle);
+      end_x = segment->center.x + segment->radius * cos (segment->end_angle);
+      end_y = segment->center.y + segment->radius * sin (segment->end_angle);
+      if (!bridge_json_buffer_append_cstr (
+              buffer,
+              "\"type\":\"circularArc\",\"center\":")
+          || !bridge_json_append_point2rd (buffer, segment->center)
+          || !bridge_json_buffer_appendf (
+                 buffer,
+                 ",\"radius\":%.17g,\"startAngle\":%.17g,\"endAngle\":%.17g,\"isCcw\":%s,\"startPoint\":",
+                 segment->radius, segment->start_angle, segment->end_angle,
+                 segment->is_ccw ? "true" : "false")
+          || !bridge_json_append_point2d_values (buffer, start_x, start_y)
+          || !bridge_json_buffer_append_cstr (buffer, ",\"endPoint\":")
+          || !bridge_json_append_point2d_values (buffer, end_x, end_y))
+        return false;
+      break;
+    case 3:
+      {
+        double major_x = segment->endpoint.x;
+        double major_y = segment->endpoint.y;
+        double minor_x = -major_y * segment->minor_major_ratio;
+        double minor_y = major_x * segment->minor_major_ratio;
+
+        start_x = segment->center.x + major_x * cos (segment->start_angle)
+                  + minor_x * sin (segment->start_angle);
+        start_y = segment->center.y + major_y * cos (segment->start_angle)
+                  + minor_y * sin (segment->start_angle);
+        end_x = segment->center.x + major_x * cos (segment->end_angle)
+                + minor_x * sin (segment->end_angle);
+        end_y = segment->center.y + major_y * cos (segment->end_angle)
+                + minor_y * sin (segment->end_angle);
+
+        if (!bridge_json_buffer_append_cstr (
+                buffer,
+                "\"type\":\"ellipticalArc\",\"center\":")
+            || !bridge_json_append_point2rd (buffer, segment->center)
+            || !bridge_json_buffer_append_cstr (buffer, ",\"majorAxisVector\":")
+            || !bridge_json_append_point2rd (buffer, segment->endpoint)
+            || !bridge_json_buffer_appendf (
+                   buffer,
+                   ",\"minorMajorRatio\":%.17g,\"startAngle\":%.17g,\"endAngle\":%.17g,\"isCcw\":%s,\"startPoint\":",
+                   segment->minor_major_ratio, segment->start_angle,
+                   segment->end_angle, segment->is_ccw ? "true" : "false")
+            || !bridge_json_append_point2d_values (buffer, start_x, start_y)
+            || !bridge_json_buffer_append_cstr (buffer, ",\"endPoint\":")
+            || !bridge_json_append_point2d_values (buffer, end_x, end_y))
+          return false;
+      }
+      break;
+    case 4:
+      if ((segment->num_knots > 0 && !segment->knots)
+          || (segment->num_control_points > 0 && !segment->control_points)
+          || (segment->num_fitpts > 0 && !segment->fitpts))
+        return false;
+      if (!bridge_json_buffer_appendf (
+              buffer,
+              "\"type\":\"spline\",\"degree\":%lld,\"isRational\":%s,\"isPeriodic\":%s,\"knots\":[",
+              (long long)segment->degree,
+              segment->is_rational ? "true" : "false",
+              segment->is_periodic ? "true" : "false"))
+        return false;
+      for (BITCODE_BL index = 0; index < segment->num_knots; index++)
+        {
+          if (index > 0 && !bridge_json_buffer_append_char (buffer, ','))
+            return false;
+          if (!bridge_json_buffer_appendf (buffer, "%.17g", segment->knots[index]))
+            return false;
+        }
+      if (!bridge_json_buffer_append_cstr (buffer, "],\"controlPoints\":["))
+        return false;
+      for (BITCODE_BL index = 0; index < segment->num_control_points; index++)
+        {
+          const Dwg_HATCH_ControlPoint *control = &segment->control_points[index];
+
+          if (index > 0 && !bridge_json_buffer_append_char (buffer, ','))
+            return false;
+          if (!bridge_json_buffer_append_cstr (buffer, "{\"point\":")
+              || !bridge_json_append_point2rd (buffer, control->point))
+            return false;
+          if (segment->is_rational
+              && !bridge_json_buffer_appendf (buffer, ",\"weight\":%.17g",
+                                             control->weight))
+            return false;
+          if (!bridge_json_buffer_append_char (buffer, '}'))
+            return false;
+        }
+      if (!bridge_json_buffer_append_char (buffer, ']'))
+        return false;
+      if (segment->num_fitpts > 0)
+        {
+          if (!bridge_json_buffer_append_cstr (buffer, ",\"fitPoints\":["))
+            return false;
+          for (BITCODE_BL index = 0; index < segment->num_fitpts; index++)
+            {
+              if (index > 0 && !bridge_json_buffer_append_char (buffer, ','))
+                return false;
+              if (!bridge_json_append_point2rd (buffer, segment->fitpts[index]))
+                return false;
+            }
+          if (!bridge_json_buffer_append_char (buffer, ']'))
+            return false;
+        }
+      if (!bridge_json_buffer_append_cstr (buffer, ",\"startTangent\":")
+          || !bridge_json_append_point2rd (buffer, segment->start_tangent)
+          || !bridge_json_buffer_append_cstr (buffer, ",\"endTangent\":")
+          || !bridge_json_append_point2rd (buffer, segment->end_tangent))
+        return false;
+      break;
+    default:
+      if (!bridge_json_buffer_appendf (buffer, "\"type\":\"unknown\",\"curveType\":%d",
+                                      (int)segment->curve_type))
+        return false;
+      break;
+    }
+
+  return bridge_json_buffer_append_char (buffer, '}');
+}
+
+static bool
+bridge_json_append_hatch_segments (BridgeJsonBuffer *buffer,
+                                  const Dwg_HATCH_Path *path)
+{
+  if (path->num_segs_or_paths > 0 && !path->segs)
+    return false;
+
+  if (!bridge_json_buffer_append_char (buffer, '['))
+    return false;
+
+  for (BITCODE_BL index = 0; index < path->num_segs_or_paths; index++)
+    {
+      if (index > 0 && !bridge_json_buffer_append_char (buffer, ','))
+        return false;
+      if (!bridge_json_append_hatch_segment (buffer, &path->segs[index]))
+        return false;
+    }
+
+  return bridge_json_buffer_append_char (buffer, ']');
+}
+
+static bool
+bridge_json_append_hatch_polyline_points (BridgeJsonBuffer *buffer,
+                                         const Dwg_HATCH_Path *path)
+{
+  if (path->num_segs_or_paths > 0 && !path->polyline_paths)
+    return false;
+
+  if (!bridge_json_buffer_append_char (buffer, '['))
+    return false;
+
+  for (BITCODE_BL index = 0; index < path->num_segs_or_paths; index++)
+    {
+      if (index > 0 && !bridge_json_buffer_append_char (buffer, ','))
+        return false;
+      if (!bridge_json_append_point2rd (buffer, path->polyline_paths[index].point))
+        return false;
+    }
+
+  return bridge_json_buffer_append_char (buffer, ']');
+}
+
+static bool
+bridge_json_append_hatch_polyline_bulges (BridgeJsonBuffer *buffer,
+                                         const Dwg_HATCH_Path *path)
+{
+  if (path->num_segs_or_paths > 0 && !path->polyline_paths)
+    return false;
+
+  if (!bridge_json_buffer_append_char (buffer, '['))
+    return false;
+
+  for (BITCODE_BL index = 0; index < path->num_segs_or_paths; index++)
+    {
+      if (index > 0 && !bridge_json_buffer_append_char (buffer, ','))
+        return false;
+      if (!bridge_json_buffer_appendf (
+              buffer, "%.17g", path->polyline_paths[index].bulge))
+        return false;
+    }
+
+  return bridge_json_buffer_append_char (buffer, ']');
+}
+
+static bool
+bridge_json_append_hatch_contour (BridgeJsonBuffer *buffer, const Dwg_Object *obj,
+                                 const Dwg_HATCH_Path *path, BITCODE_BL index)
+{
+  bool is_polyline;
+  bool is_closed;
+
+  if (!buffer || !obj || !path)
+    return false;
+
+  is_polyline = (path->flag & 2) != 0;
+  is_closed = is_polyline ? (path->closed != 0) : ((path->flag & 0x20) == 0);
+
+  if (!bridge_json_buffer_appendf (
+          buffer,
+          "{\"index\":%lld,\"type\":\"%s\",\"flag\":%lld,\"isClosed\":%s,\"boundaryHandles\":",
+          (long long)index, is_polyline ? "polyline" : "segments",
+          (long long)path->flag, is_closed ? "true" : "false")
+      || !bridge_json_append_hatch_boundary_handles (
+             buffer, obj, path->boundary_handles, path->num_boundary_handles))
+    return false;
+
+  if (is_polyline)
+    {
+      if (!bridge_json_buffer_append_cstr (buffer, ",\"points\":")
+          || !bridge_json_append_hatch_polyline_points (buffer, path))
+        return false;
+      if (path->bulges_present)
+        {
+          if (!bridge_json_buffer_append_cstr (buffer, ",\"bulges\":")
+              || !bridge_json_append_hatch_polyline_bulges (buffer, path))
+            return false;
+        }
+    }
+  else
+    {
+      if (!bridge_json_buffer_append_cstr (buffer, ",\"segments\":")
+          || !bridge_json_append_hatch_segments (buffer, path))
+        return false;
+    }
+
+  return bridge_json_buffer_append_char (buffer, '}');
+}
+
 char *
 bridge_dwg_object_xrecord_xdata_json (const Dwg_Object *obj)
 {
@@ -1094,6 +1410,35 @@ bridge_dwg_object_evaluation_graph_edges_json (const Dwg_Object *obj)
                                      (long long)edge->out_edge[4]))
         goto failed;
       if (!bridge_json_buffer_append_char (&buffer, '}'))
+        goto failed;
+    }
+
+  if (!bridge_json_buffer_append_char (&buffer, ']'))
+    goto failed;
+  return buffer.data;
+
+failed:
+  free (buffer.data);
+  return NULL;
+}
+
+char *
+bridge_dwg_object_hatch_contours_json (const Dwg_Object *obj)
+{
+  const Dwg_Entity_HATCH *hatch = bridge_dwg_hatch_ptr (obj);
+  BridgeJsonBuffer buffer = { 0 };
+
+  if (!hatch || (hatch->num_paths > 0 && !hatch->paths))
+    return NULL;
+
+  if (!bridge_json_buffer_append_char (&buffer, '['))
+    goto failed;
+
+  for (BITCODE_BL index = 0; index < hatch->num_paths; index++)
+    {
+      if (index > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+        goto failed;
+      if (!bridge_json_append_hatch_contour (&buffer, obj, &hatch->paths[index], index))
         goto failed;
     }
 

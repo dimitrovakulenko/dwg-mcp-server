@@ -62,7 +62,10 @@ impl SchemaCatalog {
         let mut lookup_to_source = HashMap::new();
 
         for source_name in &ordered_sources {
-            let aliases = aliases_by_source.get(source_name).cloned().unwrap_or_default();
+            let aliases = aliases_by_source
+                .get(source_name)
+                .cloned()
+                .unwrap_or_default();
             let canonical_name = canonical_name(source_name, &aliases);
             let is_entity = aliases.iter().any(|alias| alias == "AcDbEntity");
             let specific_properties = properties_by_source
@@ -144,7 +147,9 @@ impl SchemaCatalog {
                     properties: merge_properties(&item.properties, observed_property_names),
                 }
             })
-            .unwrap_or_else(|| inferred_type_definition(observed_type_name, observed_property_names))
+            .unwrap_or_else(|| {
+                inferred_type_definition(observed_type_name, observed_property_names)
+            })
     }
 
     fn general_type_definition(&self, lookup_name: &str) -> Option<TypeDefinition> {
@@ -236,9 +241,14 @@ fn vendor_src_root() -> PathBuf {
 }
 
 fn parse_type_names(content: &str) -> Result<Vec<String>, WorkerError> {
-    let fixed = extract_names_from_array(content, "static const char *const _dwg_type_names_fixed[] =")?;
-    let variable =
-        extract_names_from_array(content, "static const char *const _dwg_type_names_variable[] =")?;
+    let fixed = extract_names_from_array(
+        content,
+        "static const char *const _dwg_type_names_fixed[] =",
+    )?;
+    let variable = extract_names_from_array(
+        content,
+        "static const char *const _dwg_type_names_variable[] =",
+    )?;
 
     Ok(fixed.into_iter().chain(variable).collect())
 }
@@ -453,7 +463,9 @@ fn classify_field_kind(raw_kind: &str) -> String {
         "handle".to_owned()
     } else if raw_kind.starts_with('T') {
         "string".to_owned()
-    } else if raw_kind.contains("2D") || raw_kind.contains("3D") || raw_kind.contains("2R")
+    } else if raw_kind.contains("2D")
+        || raw_kind.contains("3D")
+        || raw_kind.contains("2R")
         || raw_kind.contains("3R")
     {
         "point".to_owned()
@@ -551,7 +563,10 @@ fn extend_custom_properties(
     };
 
     if matches!(source_name, "DICTIONARY" | "DICTIONARYWDFLT")
-        || matches!(canonical_name, "AcDbDictionary" | "AcDbDictionaryWithDefault")
+        || matches!(
+            canonical_name,
+            "AcDbDictionary" | "AcDbDictionaryWithDefault"
+        )
     {
         push_if_missing(PropertyDefinition {
             name: "items".to_owned(),
@@ -577,9 +592,7 @@ fn extend_custom_properties(
         push_if_missing(PropertyDefinition {
             name: "xdata".to_owned(),
             value_kind: "array".to_owned(),
-            description: Some(
-                "Raw xrecord payload as [groupCode, value] tuples.".to_owned(),
-            ),
+            description: Some("Raw xrecord payload as [groupCode, value] tuples.".to_owned()),
             queryable: false,
             reference_target: None,
         });
@@ -601,9 +614,24 @@ fn extend_custom_properties(
         push_if_missing(PropertyDefinition {
             name: "vertex_handles".to_owned(),
             value_kind: "array".to_owned(),
-            description: Some("Ordered handles of vertex entities in the polyline chain.".to_owned()),
+            description: Some(
+                "Ordered handles of vertex entities in the polyline chain.".to_owned(),
+            ),
             queryable: true,
             reference_target: Some("handle".to_owned()),
+        });
+    }
+
+    if source_name == "HATCH" || canonical_name == "AcDbHatch" {
+        push_if_missing(PropertyDefinition {
+            name: "contours".to_owned(),
+            value_kind: "array".to_owned(),
+            description: Some(
+                "Resolved hatch boundary contours with polyline points or segment geometry."
+                    .to_owned(),
+            ),
+            queryable: false,
+            reference_target: None,
         });
     }
 

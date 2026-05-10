@@ -11,8 +11,8 @@ use dwg_worker_core::{
 };
 use serde_json::{Value, json};
 
-pub use schema::{describe_supported_type, list_supported_types};
 use schema::SchemaCatalog;
+pub use schema::{describe_supported_type, list_supported_types};
 
 const DWG_ERR_CRITICAL_STATUS: i32 = 128;
 
@@ -192,9 +192,11 @@ fn augment_dynamic_block_history_properties(objects: &mut [IndexedObject]) {
         let Some(block_representation_dict_handle) = extension_children.first().cloned() else {
             continue;
         };
-        let Some(block_representation_dict) =
-            object_by_handle(objects, &indices_by_handle, &block_representation_dict_handle)
-        else {
+        let Some(block_representation_dict) = object_by_handle(
+            objects,
+            &indices_by_handle,
+            &block_representation_dict_handle,
+        ) else {
             continue;
         };
 
@@ -281,7 +283,10 @@ fn augment_polyline_vertex_properties(objects: &mut [IndexedObject]) {
     let mut updates = Vec::<(usize, Vec<(String, Value)>)>::new();
 
     for (index, object) in objects.iter().enumerate() {
-        if !matches!(object.type_name.as_str(), "AcDb2dPolyline" | "AcDb3dPolyline") {
+        if !matches!(
+            object.type_name.as_str(),
+            "AcDb2dPolyline" | "AcDb3dPolyline"
+        ) {
             continue;
         }
 
@@ -381,10 +386,9 @@ unsafe fn parse_native_object(
         .as_ref()
         .map(|item| item.generic_type.clone())
         .unwrap_or_else(|| schema::to_generic_name(&type_name));
-    let handle = format!(
-        "{:X}",
-        unsafe { libredwg_sys::bridge_dwg_object_handle_value(object) }
-    );
+    let handle = format!("{:X}", unsafe {
+        libredwg_sys::bridge_dwg_object_handle_value(object)
+    });
     let container_block_handle = if kind == "entity" {
         let owner_handle = unsafe { libredwg_sys::bridge_dwg_entity_owner_handle(object) };
         (owner_handle != 0).then(|| format!("{owner_handle:X}"))
@@ -484,6 +488,13 @@ unsafe fn read_special_properties(
                 properties.insert("edges".to_owned(), value);
             }
         }
+        "HATCH" => {
+            if let Some(value) = unsafe {
+                read_json_property(object, libredwg_sys::bridge_dwg_object_hatch_contours_json)
+            } {
+                properties.insert("contours".to_owned(), value);
+            }
+        }
         _ => {}
     }
 
@@ -516,7 +527,9 @@ unsafe fn read_field_value(
         return None;
     }
 
-    let text = unsafe { CStr::from_ptr(raw) }.to_string_lossy().into_owned();
+    let text = unsafe { CStr::from_ptr(raw) }
+        .to_string_lossy()
+        .into_owned();
     unsafe {
         libredwg_sys::bridge_dwg_string_free(raw);
     }
@@ -533,7 +546,9 @@ unsafe fn read_json_property(
         return None;
     }
 
-    let text = unsafe { CStr::from_ptr(raw) }.to_string_lossy().into_owned();
+    let text = unsafe { CStr::from_ptr(raw) }
+        .to_string_lossy()
+        .into_owned();
     unsafe {
         libredwg_sys::bridge_dwg_string_free(raw);
     }
@@ -630,7 +645,11 @@ fn c_string_to_owned(value: *const std::os::raw::c_char) -> Option<String> {
         return None;
     }
 
-    Some(unsafe { CStr::from_ptr(value) }.to_string_lossy().into_owned())
+    Some(
+        unsafe { CStr::from_ptr(value) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 fn object_by_handle<'a>(
@@ -695,10 +714,7 @@ mod tests {
             object(
                 "P1",
                 "AcDb3dPolyline",
-                [
-                    ("first_vertex", json!("V1")),
-                    ("last_vertex", json!("V2")),
-                ],
+                [("first_vertex", json!("V1")), ("last_vertex", json!("V2"))],
             ),
             object(
                 "V1",

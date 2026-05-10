@@ -1,10 +1,10 @@
-use std::path::PathBuf;
 use std::io::Cursor;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use dwg_libredwg::{LibreDwgFactory, describe_supported_type, list_supported_types};
 use dwg_worker_core::{
-    BackendFactory, DwgDocument, FilterOperator, GetObjectsRequest, PropertyFilter, Projection,
+    BackendFactory, DwgDocument, FilterOperator, GetObjectsRequest, Projection, PropertyFilter,
     QueryMode, QueryObjectsRequest, QueryScope, QuerySpace, RelationDirection, RelationFilter,
     SortDirection, SortSpec, StdioHandler,
 };
@@ -22,13 +22,24 @@ fn lock_libredwg() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testData/house_plan.dwg")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testData/house_plan.dwg")
 }
 
 fn dyn_blocks_fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testData/dyn-blocks.dwg")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testData/dyn-blocks.dwg")
+}
+
+fn contains_2d_point(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(items) => {
+            if items.len() == 2 && items.iter().all(serde_json::Value::is_number) {
+                return true;
+            }
+            items.iter().any(contains_2d_point)
+        }
+        serde_json::Value::Object(items) => items.values().any(contains_2d_point),
+        _ => false,
+    }
 }
 
 #[test]
@@ -485,11 +496,84 @@ fn house_plan_exposes_lwpolyline_points_arrays() {
         .and_then(|value| value.as_i64())
         .expect("polyline num_points should be present");
     assert_eq!(points.len(), num_points as usize);
-    assert!(
-        points
-            .iter()
-            .all(|point| point.as_array().map(|item| item.len() == 2).unwrap_or(false))
-    );
+    assert!(points.iter().all(|point| {
+        point
+            .as_array()
+            .map(|item| item.len() == 2)
+            .unwrap_or(false)
+    }));
+}
+
+#[test]
+fn house_plan_full_hatches_include_contours_with_point_data() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&fixture_path())
+        .expect("fixture should open");
+
+    let hatch_handles = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("AcDbHatch".to_owned()),
+            generic_type: None,
+            where_clauses: Vec::new(),
+            scope: None,
+            relations: Vec::new(),
+            sort: Vec::new(),
+            mode: QueryMode::Handles,
+            projection: Projection::Summary,
+            select: None,
+            limit: 10,
+            cursor: None,
+        })
+        .expect("hatch query should work");
+    assert!(!hatch_handles.handles.is_empty());
+
+    let hatches = document
+        .get_objects(GetObjectsRequest {
+            handles: hatch_handles.handles.clone(),
+            projection: Projection::Full,
+            select: None,
+        })
+        .expect("hatches should load in full mode");
+    assert!(hatches.missing_handles.is_empty());
+
+    let hatch = hatches
+        .items
+        .iter()
+        .find(|item| {
+            item.properties
+                .get("contours")
+                .and_then(|value| value.as_array())
+                .is_some_and(|contours| !contours.is_empty())
+        })
+        .expect("expected at least one hatch with contours");
+
+    let contours = hatch
+        .properties
+        .get("contours")
+        .and_then(|value| value.as_array())
+        .expect("contours should be present");
+    assert!(!contours.is_empty());
+    assert!(contains_2d_point(&hatch.properties["contours"]));
+
+    let hatch_with_counts = document
+        .get_objects(GetObjectsRequest {
+            handles: vec![hatch.handle.clone()],
+            projection: Projection::Full,
+            select: Some(vec!["num_paths".to_owned(), "contours".to_owned()]),
+        })
+        .expect("hatch should load with explicit contour selection");
+    assert!(hatch_with_counts.missing_handles.is_empty());
+    let properties = &hatch_with_counts.items[0].properties;
+    let num_paths = properties
+        .get("num_paths")
+        .and_then(|value| value.as_i64())
+        .expect("num_paths should be present");
+    let selected_contours = properties
+        .get("contours")
+        .and_then(|value| value.as_array())
+        .expect("selected contours should be present");
+    assert_eq!(selected_contours.len(), num_paths as usize);
 }
 
 #[test]
@@ -546,6 +630,14 @@ fn supported_types_and_properties_cover_3d_polylines_and_angular_dimensions() {
         .map(|item| item.name)
         .collect::<Vec<_>>();
     assert!(xrecord_properties.contains(&"xdata".to_owned()));
+
+    let hatch = describe_supported_type("AcDbHatch").expect("hatch type should exist");
+    let hatch_properties = hatch
+        .properties
+        .into_iter()
+        .map(|item| item.name)
+        .collect::<Vec<_>>();
+    assert!(hatch_properties.contains(&"contours".to_owned()));
 }
 
 #[test]
@@ -636,18 +728,12 @@ fn dyn_blocks_exposes_dynamic_block_history_dictionaries_and_xrecords() {
         by_handle["D13"].get("items"),
         Some(&json!({"1": "D18", "8": "D15", "9": "D16"}))
     );
-    assert_eq!(
-        by_handle["CBE"].get("item_handles"),
-        Some(&json!(["CF2"]))
-    );
+    assert_eq!(by_handle["CBE"].get("item_handles"), Some(&json!(["CF2"])));
     assert_eq!(
         by_handle["CF2"].get("item_handles"),
         Some(&json!(["CF3", "CF4"]))
     );
-    assert_eq!(
-        by_handle["CF4"].get("item_handles"),
-        Some(&json!(["D13"]))
-    );
+    assert_eq!(by_handle["CF4"].get("item_handles"), Some(&json!(["D13"])));
     assert_eq!(
         by_handle["D13"].get("item_handles"),
         Some(&json!(["D14", "D17", "D18", "D15", "D16"]))
@@ -767,7 +853,10 @@ fn dyn_blocks_exposes_evaluation_graph_nodes_and_edges() {
     assert!(props.get("num_nodes").is_some());
     assert!(props.get("num_edges").is_some());
 
-    let nodes = props.get("nodes").and_then(|v| v.as_array()).expect("nodes array");
+    let nodes = props
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .expect("nodes array");
     assert!(!nodes.is_empty());
     let first_node = nodes[0].as_object().expect("node object");
     assert!(first_node.contains_key("id"));
@@ -776,7 +865,10 @@ fn dyn_blocks_exposes_evaluation_graph_nodes_and_edges() {
     assert!(first_node.contains_key("evalexpr"));
     assert!(first_node.contains_key("node"));
 
-    let edges = props.get("edges").and_then(|v| v.as_array()).expect("edges array");
+    let edges = props
+        .get("edges")
+        .and_then(|v| v.as_array())
+        .expect("edges array");
     assert!(!edges.is_empty());
     let first_edge = edges[0].as_object().expect("edge object");
     assert!(first_edge.contains_key("id"));
@@ -852,7 +944,10 @@ fn worker_lists_types_with_regex_and_pagination() {
     );
 
     assert_eq!(responses[2]["result"]["total"], json!(2));
-    assert_eq!(responses[2]["result"]["nextCursor"], serde_json::Value::Null);
+    assert_eq!(
+        responses[2]["result"]["nextCursor"],
+        serde_json::Value::Null
+    );
     assert_eq!(
         responses[2]["result"]["items"][0]["typeName"],
         json!("AcDb3dPolyline")
