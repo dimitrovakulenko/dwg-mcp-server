@@ -9,6 +9,9 @@ Agents can open a DWG, inspect available types, fetch objects by handle, and que
 Use DWG MCP Server from the MCP client of your choice.
 The npm package launches the published Docker image.
 
+If your MCP client, AI agent, or test harness does not support MCP roots, set
+`DWG_MCP_ALLOWED_ROOTS` to the folders that should be accessible.
+
 ### Codex
 
 ```bash
@@ -26,6 +29,8 @@ explicit allowed roots for the folders that contain your drawings.
 claude mcp add --scope user --transport stdio dwg-mcp -- npx -y @dmytro-prototypes/dwg-mcp-server
 ```
 
+Claude Code provides MCP roots, so no extra path variable is usually needed.
+
 ### Cursor
 
 ```json
@@ -39,17 +44,12 @@ claude mcp add --scope user --transport stdio dwg-mcp -- npx -y @dmytro-prototyp
 }
 ```
 
-DWG files must be opened from roots listed by `dwg.list_roots`. The server first
-asks the MCP client for `roots/list`. If the client does not support MCP roots,
-configure explicit allowed roots with `--allowed-root` or
-`DWG_MCP_ALLOWED_ROOTS`.
-
 ## Exposed Tools
 
 | Tool | Purpose |
 | --- | --- |
-| `dwg.list_roots` | List MCP client roots that can be used with `dwg.open_file`. |
-| `dwg.open_file` | Open a DWG from `rootUri` plus `relativePath` and return a `documentId`. |
+| `dwg.list_roots` | List folders available for DWG access. |
+| `dwg.open_file` | Open a DWG from an available folder and return a `documentId`. |
 | `dwg.close_file` | Close an opened document and release its worker process. |
 | `dwg.list_types` | List the globally supported DWG types known to the backend. |
 | `dwg.list_file_types` | List only the types that are present in a specific opened DWG. |
@@ -59,8 +59,8 @@ configure explicit allowed roots with `--allowed-root` or
 
 A typical flow is:
 
-1. Discover available roots with `dwg.list_roots`.
-2. Open a file with `dwg.open_file`, passing a returned `rootUri` and a DWG path relative to that root.
+1. Discover available folders with `dwg.list_roots`.
+2. Open a file from one of those folders with `dwg.open_file`.
 3. Inspect supported or file-local types with `dwg.list_types`, `dwg.list_file_types`, or `dwg.describe_type`.
 4. Fetch known handles with `dwg.get_objects` or search the drawing with `dwg.query_objects`.
 5. Close the session with `dwg.close_file`.
@@ -93,13 +93,9 @@ This is what makes queries over blocks, layers, layouts, references, and related
 
 ### Access and packaging
 
-The server opens files only through roots returned by `dwg.list_roots`.
-`dwg.open_file` accepts a `rootUri` returned by `dwg.list_roots` and a
-`relativePath` under that root. Absolute host paths and arbitrary `file://` file
-URIs are not accepted by the MCP tool API.
-
-Roots come from the MCP client when it supports `roots/list`. For clients that do
-not support MCP roots, configure explicit allowed roots:
+DWG files must be opened from roots listed by `dwg.list_roots`. The server first
+asks the MCP client for roots. If the client, AI agent, or test harness does not
+support MCP roots, configure explicit allowed roots:
 
 ```bash
 python3 -m dwg_mcp_server --allowed-root "$HOME/Downloads"
@@ -112,8 +108,17 @@ DWG_MCP_ALLOWED_ROOTS="$HOME/Downloads;$HOME/Documents/dwg" \
 python3 -m dwg_mcp_server
 ```
 
+`DWG_MCP_ALLOWED_ROOTS` is an authorization fallback for clients without roots.
+It should be a semicolon-separated list of absolute directories.
+
 The Docker wrapper can mount host folders into the container read-only at their
-original absolute paths so client root URIs still resolve inside the container.
+original absolute paths so drawings in those folders are visible inside the
+container.
+For clients that provide MCP roots, set `DWG_MCP_DOCKER_MOUNTS` when those roots
+are outside the launcher's default mount. For clients without MCP roots,
+`DWG_MCP_ALLOWED_ROOTS` is used both as the explicit allowed-root list and, by
+default, as the Docker mount list.
+
 The Docker image itself unpacks a prebuilt LibreDWG bundle, builds the Rust
 worker against it, and copies only the static-linked worker plus schema files
 into the final Python runtime image.
@@ -193,12 +198,19 @@ DWG_MCP_DOCKER_MOUNTS="$HOME/Documents;$HOME/Desktop/dwg" \
 bash scripts/run-docker-mcp-server.sh
 ```
 
+Use this when your client supports MCP roots but the container still needs those
+host root paths mounted read-only.
+
 For clients without MCP roots, set `DWG_MCP_ALLOWED_ROOTS` instead:
 
 ```bash
 DWG_MCP_ALLOWED_ROOTS="$HOME/Documents;$HOME/Desktop/dwg" \
 bash scripts/run-docker-mcp-server.sh
 ```
+
+Use this when your AI agent or harness does not provide MCP roots. The server
+will allow those directories, and the Docker launcher will mount the same
+directories read-only unless `DWG_MCP_DOCKER_MOUNTS` is set.
 
 By default, the Docker launcher mounts `DWG_MCP_ALLOWED_ROOTS`, then
 `~/Documents` when no roots are configured. Access is still authorized by MCP

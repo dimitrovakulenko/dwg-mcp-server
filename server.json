@@ -21,7 +21,7 @@
       "environmentVariables": [
         {
           "name": "DWG_MCP_ALLOWED_ROOTS",
-          "description": "Semicolon-separated absolute directories allowed for DWG access when the MCP client does not provide roots. Optional for clients with MCP roots support.",
+          "description": "Semicolon-separated absolute directories allowed for DWG access when the MCP client, AI agent, or test harness does not provide MCP roots. Optional when MCP roots are supported.",
           "format": "string",
           "isRequired": false,
           "isSecret": false,
