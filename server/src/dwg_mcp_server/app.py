@@ -2,32 +2,38 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool
+from mcp.types import Tool, ToolAnnotations
 
 from .file_access import (
-    configured_access_folders,
-    ensure_within_roots,
     file_uri_to_path,
-    format_access_folders,
-    normalize_local_path,
+    resolve_root_relative_path,
 )
 from .worker_client import SessionManager, WorkerClientError
 
 SERVER_INSTRUCTIONS = (
+    "Use dwg.list_roots to discover roots available for DWG access. "
     "Open a DWG with dwg.open_file before using file-scoped tools. "
     "Use dwg.list_file_types to discover valid type names for that file. "
-    "open_file paths must be inside client roots and configured access folders."
+    "open_file accepts only rootUri plus a path relative to that root."
 )
+
+READ_ONLY_TOOL = ToolAnnotations(readOnlyHint=True)
 
 
 class DwgMcpApplication:
-    def __init__(self, session_manager: SessionManager | None = None) -> None:
+    def __init__(
+        self,
+        session_manager: SessionManager | None = None,
+        *,
+        allowed_roots: Sequence[str | Path] = (),
+    ) -> None:
         self.session_manager = session_manager or SessionManager()
+        self.allowed_roots = tuple(self._normalize_allowed_root(root) for root in allowed_roots)
 
         @asynccontextmanager
         async def lifespan(_: Server):
@@ -56,26 +62,42 @@ class DwgMcpApplication:
     def tool_definitions(self) -> list[Tool]:
         return [
             Tool(
+                name="dwg.list_roots",
+                description=(
+                    "List roots that can be used with dwg.open_file. Uses MCP client roots when "
+                    "the client provides them, otherwise uses server-configured allowed roots."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                annotations=READ_ONLY_TOOL,
+            ),
+            Tool(
                 name="dwg.open_file",
                 description=(
-                    "Open a DWG and return documentId. Accepts an absolute path or file:// URI "
-                    "within allowed roots/folders."
+                    "Open a DWG from a listed root and return documentId. "
+                    "Call dwg.list_roots first, then provide one returned rootUri and a "
+                    "relativePath under that root."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute local path to a DWG file.",
-                        },
-                        "fileUri": {
+                        "rootUri": {
                             "type": "string",
                             "format": "uri",
-                            "description": "file:// URI to a local DWG file.",
+                            "description": "A file:// root URI returned by dwg.list_roots.",
+                        },
+                        "relativePath": {
+                            "type": "string",
+                            "description": "Path to the DWG file relative to rootUri.",
                         },
                     },
+                    "required": ["rootUri", "relativePath"],
                     "additionalProperties": False,
                 },
+                annotations=READ_ONLY_TOOL,
             ),
             Tool(
                 name="dwg.close_file",
@@ -91,6 +113,7 @@ class DwgMcpApplication:
                     "required": ["documentId"],
                     "additionalProperties": False,
                 },
+                annotations=READ_ONLY_TOOL,
             ),
             Tool(
                 name="dwg.list_types",
@@ -118,6 +141,7 @@ class DwgMcpApplication:
                     },
                     "additionalProperties": False,
                 },
+                annotations=READ_ONLY_TOOL,
             ),
             Tool(
                 name="dwg.list_file_types",
@@ -150,6 +174,7 @@ class DwgMcpApplication:
                     "required": ["documentId"],
                     "additionalProperties": False,
                 },
+                annotations=READ_ONLY_TOOL,
             ),
             Tool(
                 name="dwg.describe_type",
@@ -168,6 +193,7 @@ class DwgMcpApplication:
                     "required": ["typeName"],
                     "additionalProperties": False,
                 },
+                annotations=READ_ONLY_TOOL,
             ),
             Tool(
                 name="dwg.get_objects",
@@ -201,6 +227,7 @@ class DwgMcpApplication:
                     "required": ["documentId", "handles"],
                     "additionalProperties": False,
                 },
+                annotations=READ_ONLY_TOOL,
             ),
             Tool(
                 name="dwg.query_objects",
@@ -318,19 +345,23 @@ class DwgMcpApplication:
                     "required": ["documentId"],
                     "additionalProperties": False,
                 },
+                annotations=READ_ONLY_TOOL,
             ),
         ]
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name == "dwg.list_roots":
+            return {"roots": await self._list_available_roots()}
         if name == "dwg.open_file":
-            file_path = await self._resolve_open_file_path(arguments)
+            file_path, root = await self._resolve_open_file_path(arguments)
             try:
                 opened = await self.session_manager.open_file(str(file_path))
             except WorkerClientError as error:
                 raise ValueError(str(error)) from error
             return {
-                "path": str(file_path),
-                "fileUri": file_path.as_uri(),
+                "rootUri": root["uri"],
+                "rootName": root.get("name"),
+                "relativePath": arguments["relativePath"],
                 **opened,
             }
         if name == "dwg.close_file":
@@ -361,46 +392,91 @@ class DwgMcpApplication:
             return await self.session_manager.query_objects(arguments["documentId"], arguments)
         raise ValueError(f"unknown tool: {name}")
 
-    async def _resolve_open_file_path(self, arguments: dict[str, Any]) -> Path:
-        path_text = arguments.get("path")
-        file_uri = arguments.get("fileUri")
+    async def _resolve_open_file_path(self, arguments: dict[str, Any]) -> tuple[Path, dict[str, str | None]]:
+        if set(arguments) != {"rootUri", "relativePath"}:
+            raise ValueError("Provide exactly rootUri and relativePath from dwg.list_roots.")
 
-        if sum(x is not None for x in (path_text, file_uri)) != 1:
-            raise ValueError("Provide exactly one of `path` or `fileUri`.")
+        root_uri = arguments["rootUri"]
+        relative_path = arguments["relativePath"]
+        roots = await self._list_available_roots()
+        root = next((candidate for candidate in roots if candidate["uri"] == root_uri), None)
+        if root is None:
+            raise ValueError("rootUri must exactly match a URI returned by dwg.list_roots")
 
-        if path_text is not None:
-            file_path = normalize_local_path(path_text)
-        else:
-            file_path = file_uri_to_path(file_uri)
+        root_path = file_uri_to_path(root_uri)
+        try:
+            return resolve_root_relative_path(root_path, relative_path), root
+        except OSError as error:
+            raise ValueError(f"failed to resolve relativePath under MCP root: {error}") from error
 
-        root_paths = await self._list_client_root_paths()
-        if root_paths is not None:
-            ensure_within_roots(file_path, root_paths)
-
-        configured_folders = configured_access_folders()
-        if configured_folders:
-            try:
-                ensure_within_roots(
-                    file_path,
-                    configured_folders,
-                    boundary_name="configured access folders",
-                )
-            except ValueError as error:
-                raise ValueError(self._with_access_folders(str(error))) from error
-        return file_path
-
-    async def _list_client_root_paths(self) -> list[Path] | None:
+    async def _list_client_roots(self) -> list[dict[str, str | None]]:
         try:
             request_context = self.server.request_context
         except LookupError:
-            return None
+            raise ValueError("MCP client roots are not available in this context")
 
         client_params = request_context.session.client_params
         if client_params is None or client_params.capabilities.roots is None:
-            return None
+            raise ValueError("MCP client roots are not advertised by this client")
 
         roots_result = await request_context.session.list_roots()
-        return [file_uri_to_path(str(root.uri)) for root in roots_result.roots]
+        roots: list[dict[str, str | None]] = []
+        for root in roots_result.roots:
+            root_uri = str(root.uri)
+            file_uri_to_path(root_uri)
+            roots.append(
+                {
+                    "uri": root_uri,
+                    "name": root.name,
+                }
+            )
+        return roots
+
+    async def _list_available_roots(self) -> list[dict[str, str | None]]:
+        configured_roots = self._list_configured_roots()
+        try:
+            client_roots = await self._list_client_roots()
+        except Exception as error:
+            if configured_roots:
+                return configured_roots
+            raise ValueError(
+                "MCP client roots are required to open DWG files unless "
+                "--allowed-root or DWG_MCP_ALLOWED_ROOTS is configured"
+            ) from error
+
+        return self._merge_roots([*client_roots, *configured_roots])
+
+    def _list_configured_roots(self) -> list[dict[str, str | None]]:
+        return [
+            {
+                "uri": root.as_uri(),
+                "name": root.name or str(root),
+            }
+            for root in self.allowed_roots
+        ]
+
+    @staticmethod
+    def _merge_roots(roots: list[dict[str, str | None]]) -> list[dict[str, str | None]]:
+        merged: list[dict[str, str | None]] = []
+        seen: set[str] = set()
+        for root in roots:
+            root_uri = root["uri"]
+            if root_uri in seen:
+                continue
+            seen.add(root_uri)
+            merged.append(root)
+        return merged
+
+    @staticmethod
+    def _normalize_allowed_root(root: str | Path) -> Path:
+        root_path = Path(root).expanduser()
+        if not root_path.is_absolute():
+            raise ValueError("allowed roots must be absolute local paths")
+
+        resolved = root_path.resolve(strict=True)
+        if not resolved.is_dir():
+            raise ValueError("allowed roots must point to existing directories")
+        return resolved
 
     async def run_stdio(self) -> None:
         async with stdio_server() as (read_stream, write_stream):
@@ -416,14 +492,4 @@ class DwgMcpApplication:
             server_version="0.1.0",
             capabilities=self.server.get_capabilities(NotificationOptions(), {}),
             instructions=SERVER_INSTRUCTIONS,
-        )
-
-    def _with_access_folders(self, message: str) -> str:
-        folders = configured_access_folders()
-        if not folders:
-            return message
-        return (
-            f"{message}\n"
-            f"Allowed folders: {format_access_folders(folders)}\n"
-            "Copy the DWG there, or restart with DWG_MCP_HOST_FOLDERS including its folder."
         )

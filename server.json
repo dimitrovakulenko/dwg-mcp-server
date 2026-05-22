@@ -20,8 +20,16 @@
       },
       "environmentVariables": [
         {
-          "name": "DWG_MCP_HOST_FOLDERS",
-          "description": "Semicolon-separated absolute host folders that may be opened read-only. Defaults to ~/Documents when omitted by the npm Docker launcher.",
+          "name": "DWG_MCP_ALLOWED_ROOTS",
+          "description": "Semicolon-separated absolute directories allowed for DWG access when the MCP client does not provide roots. Optional for clients with MCP roots support.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false,
+          "placeholder": "/absolute/path/to/dwg/files;/another/dwg/folder"
+        },
+        {
+          "name": "DWG_MCP_DOCKER_MOUNTS",
+          "description": "Semicolon-separated host folders mounted read-only into the Docker launcher at their original absolute paths. Access is still authorized by MCP client roots or DWG_MCP_ALLOWED_ROOTS. Defaults to DWG_MCP_ALLOWED_ROOTS, then ~/Documents when omitted.",
           "format": "string",
           "isRequired": false,
           "isSecret": false,

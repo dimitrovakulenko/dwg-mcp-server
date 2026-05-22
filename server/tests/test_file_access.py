@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import os
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from dwg_mcp_server.file_access import (
-    configured_access_folders,
     ensure_within_roots,
     file_uri_to_path,
-    format_access_folders,
     normalize_local_path,
+    resolve_root_relative_path,
 )
 
 
@@ -36,22 +33,21 @@ class FileAccessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outside the client roots"):
             ensure_within_roots(house_plan, [(repo_root() / "server").resolve()])
 
-    def test_configured_access_folders_supports_semicolon_separated_paths(self) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "DWG_MCP_HOST_FOLDERS": f"{repo_root() / 'testData'}; {repo_root() / 'server'}"
-            },
-            clear=False,
-        ):
-            self.assertEqual(
-                configured_access_folders(),
-                [(repo_root() / "testData").resolve(), (repo_root() / "server").resolve()],
-            )
-
-    def test_format_access_folders_is_human_readable(self) -> None:
-        rendered = format_access_folders(
-            [(repo_root() / "testData").resolve(), (repo_root() / "server").resolve()]
+    def test_resolve_root_relative_path_accepts_dwg_under_root(self) -> None:
+        resolved = resolve_root_relative_path(
+            repo_root() / "testData",
+            "house_plan.dwg",
         )
-        self.assertIn(str((repo_root() / "testData").resolve()), rendered)
-        self.assertIn(str((repo_root() / "server").resolve()), rendered)
+        self.assertEqual(resolved, (repo_root() / "testData" / "house_plan.dwg").resolve())
+
+    def test_resolve_root_relative_path_rejects_absolute_paths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be relative"):
+            resolve_root_relative_path(repo_root() / "testData", str(repo_root()))
+
+    def test_resolve_root_relative_path_rejects_traversal(self) -> None:
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            resolve_root_relative_path(repo_root() / "testData", "../README.md")
+
+    def test_resolve_root_relative_path_rejects_non_dwg_files(self) -> None:
+        with self.assertRaisesRegex(ValueError, ".dwg"):
+            resolve_root_relative_path(repo_root(), "README.md")

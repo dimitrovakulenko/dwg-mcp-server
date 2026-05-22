@@ -26,6 +26,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
           ref: main
+          lfs: true
 
       - name: Init submodules
         run: git submodule update --init --recursive
@@ -74,8 +75,9 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            LIBREDWG_TARGET=x86_64-unknown-linux-gnu
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

@@ -22,70 +22,33 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+          lfs: true
 
       - name: Init submodules
         run: git submodule update --init --recursive
 
-      - name: Resolve LibreDWG revision
-        id: libredwg-rev
-        run: echo "rev=$(git -C third_party/libredwg rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Install LibreDWG / Rust build dependencies
+      - name: Install Rust build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake bison build-essential clang flex libclang-dev \
-            libtool libxml2-dev make pkg-config texinfo
+            build-essential clang libclang-dev libxml2-dev pkg-config
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "."
-
-      - name: Restore cached LibreDWG build
-        id: libredwg-cache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: .cache/libredwg-root
-          key: libredwg-root-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.libredwg-rev.outputs.rev }}-${{ hashFiles('scripts/build-libredwg.sh') }}
-
-      - name: Build LibreDWG (third_party)
-        env:
-          LIBREDWG_CACHE_ROOT: ${{ github.workspace }}/.cache/libredwg-root
-        run: |
-          set -euo pipefail
-
-          if [ -f "$LIBREDWG_CACHE_ROOT/src/.libs/libredwg.a" ] && \
-             [ -f "$LIBREDWG_CACHE_ROOT/src/config.h" ] && \
-             [ -f "$LIBREDWG_CACHE_ROOT/include/dwg_api.h" ]; then
-            echo "Using cached LibreDWG build at $LIBREDWG_CACHE_ROOT"
-          else
-            bash scripts/build-libredwg.sh
-            rm -rf "$LIBREDWG_CACHE_ROOT"
-            mkdir -p "$LIBREDWG_CACHE_ROOT/src/.libs" "$LIBREDWG_CACHE_ROOT/include"
-            cp third_party/libredwg/src/.libs/libredwg.a "$LIBREDWG_CACHE_ROOT/src/.libs/"
-            cp third_party/libredwg/src/*.h "$LIBREDWG_CACHE_ROOT/src/"
-            cp third_party/libredwg/include/*.h "$LIBREDWG_CACHE_ROOT/include/"
-          fi
-
-      - name: Save LibreDWG build cache
-        if: ${{ steps.libredwg-cache-restore.outputs.cache-hit != 'true' && hashFiles('.cache/libredwg-root/src/.libs/libredwg.a', '.cache/libredwg-root/src/config.h', '.cache/libredwg-root/include/dwg_api.h') != '' }}
-        uses: actions/cache/save@v4
-        with:
-          path: .cache/libredwg-root
-          key: ${{ steps.libredwg-cache-restore.outputs.cache-primary-key }}
+      - name: Prepare prebuilt LibreDWG
+        run: bash scripts/use-libredwg-prebuilt.sh x86_64-unknown-linux-gnu "${{ github.workspace }}/.cache/libredwg-root"
 
       - name: Cargo test (workspace)
         env:
           LIBREDWG_ROOT_DIR: ${{ github.workspace }}/.cache/libredwg-root
+          LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/.cache/libredwg-root/src
         run: cargo test --workspace
 
       - name: Build dwg-worker binary for Python tests
         env:
           LIBREDWG_ROOT_DIR: ${{ github.workspace }}/.cache/libredwg-root
+          LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/.cache/libredwg-root/src
         run: cargo build -p dwg-worker
 
       - name: Set up Python

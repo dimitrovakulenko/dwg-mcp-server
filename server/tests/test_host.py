@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from dwg_mcp_server.app import DwgMcpApplication
 from dwg_mcp_server.worker_client import SessionManager, UnknownDocumentError
@@ -17,8 +15,15 @@ def house_plan() -> str:
     return str(repo_root() / "testData" / "house_plan.dwg")
 
 
-def house_plan_uri() -> str:
-    return (repo_root() / "testData" / "house_plan.dwg").resolve().as_uri()
+def test_data_root_uri() -> str:
+    return (repo_root() / "testData").resolve().as_uri()
+
+
+def house_plan_open_args() -> dict[str, str]:
+    return {
+        "rootUri": test_data_root_uri(),
+        "relativePath": "house_plan.dwg",
+    }
 
 
 class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
@@ -76,6 +81,11 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.manager = SessionManager(worker_cwd=repo_root())
         self.app = DwgMcpApplication(session_manager=self.manager)
 
+        async def list_client_roots() -> list[dict[str, str]]:
+            return [{"uri": test_data_root_uri(), "name": "testData"}]
+
+        self.app._list_client_roots = list_client_roots  # type: ignore[method-assign]
+
     async def asyncTearDown(self) -> None:
         await self.manager.close_all()
 
@@ -84,6 +94,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             tool_names,
             [
+                "dwg.list_roots",
                 "dwg.open_file",
                 "dwg.close_file",
                 "dwg.list_types",
@@ -102,10 +113,13 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         property_names = {item["name"] for item in described["properties"]}
         self.assertIn("center_pt", property_names)
 
-        opened = await self.app.call_tool("dwg.open_file", {"path": house_plan()})
+        roots = await self.app.call_tool("dwg.list_roots", {})
+        self.assertEqual(roots["roots"][0]["uri"], test_data_root_uri())
+
+        opened = await self.app.call_tool("dwg.open_file", house_plan_open_args())
         self.assertIn("documentId", opened)
-        self.assertEqual(opened["path"], house_plan())
-        self.assertEqual(opened["fileUri"], house_plan_uri())
+        self.assertEqual(opened["rootUri"], test_data_root_uri())
+        self.assertEqual(opened["relativePath"], "house_plan.dwg")
 
         listed = await self.app.call_tool(
             "dwg.list_file_types",
@@ -174,7 +188,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(closed["closed"])
 
     async def test_get_objects_includes_insertion_points(self) -> None:
-        opened = await self.app.call_tool("dwg.open_file", {"path": house_plan()})
+        opened = await self.app.call_tool("dwg.open_file", house_plan_open_args())
         document_id = opened["documentId"]
 
         block_reference = await self.app.call_tool(
@@ -215,7 +229,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(text_ins_pt), 2)
 
     async def test_get_objects_includes_lwpolyline_points(self) -> None:
-        opened = await self.app.call_tool("dwg.open_file", {"path": house_plan()})
+        opened = await self.app.call_tool("dwg.open_file", house_plan_open_args())
         document_id = opened["documentId"]
 
         polyline_handles = await self.app.call_tool(
@@ -255,7 +269,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(len(point) == 2 for point in properties["points"]))
 
     async def test_full_object_queries_include_extended_data(self) -> None:
-        opened = await self.app.call_tool("dwg.open_file", {"path": house_plan()})
+        opened = await self.app.call_tool("dwg.open_file", house_plan_open_args())
         document_id = opened["documentId"]
 
         queried = await self.app.call_tool(
@@ -286,27 +300,68 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             "modelSpace",
         )
 
-    async def test_open_file_failure_mentions_configured_access_folders(self) -> None:
-        blocked = str(repo_root() / "testData" / "house_plan.dwg")
-        with patch.dict(
-            os.environ,
-            {"DWG_MCP_HOST_FOLDERS": str((repo_root() / "server").resolve())},
-            clear=False,
-        ):
-            with self.assertRaisesRegex(ValueError, "Allowed folders"):
-                await self.app.call_tool("dwg.open_file", {"path": blocked})
-            with self.assertRaisesRegex(ValueError, "DWG_MCP_HOST_FOLDERS"):
-                await self.app.call_tool("dwg.open_file", {"path": blocked})
+    async def test_open_file_rejects_unknown_root_uri(self) -> None:
+        with self.assertRaisesRegex(ValueError, "dwg.list_roots"):
+            await self.app.call_tool(
+                "dwg.open_file",
+                {
+                    "rootUri": (repo_root() / "server").resolve().as_uri(),
+                    "relativePath": "house_plan.dwg",
+                },
+            )
 
-    async def test_open_file_missing_file_does_not_mention_configured_access_folders(self) -> None:
-        missing = str(repo_root() / "testData" / "missing.dwg")
-        with patch.dict(
-            os.environ,
-            {"DWG_MCP_HOST_FOLDERS": str((repo_root() / "testData").resolve())},
-            clear=False,
-        ):
-            with self.assertRaises(ValueError) as context:
-                await self.app.call_tool("dwg.open_file", {"path": missing})
-        text = str(context.exception)
-        self.assertNotIn("Allowed folders", text)
-        self.assertNotIn("DWG_MCP_HOST_FOLDERS", text)
+    async def test_open_file_rejects_legacy_path_arguments(self) -> None:
+        with self.assertRaisesRegex(ValueError, "rootUri"):
+            await self.app.call_tool("dwg.open_file", {"path": house_plan()})
+
+    async def test_configured_allowed_roots_are_added_to_client_roots(self) -> None:
+        self.app.allowed_roots = ((repo_root() / "server").resolve(),)
+        roots = await self.app.call_tool("dwg.list_roots", {})
+        self.assertEqual(
+            [root["uri"] for root in roots["roots"]],
+            [
+                test_data_root_uri(),
+                (repo_root() / "server").resolve().as_uri(),
+            ],
+        )
+
+
+class ApplicationAllowedRootTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.manager = SessionManager(worker_cwd=repo_root())
+        self.app = DwgMcpApplication(
+            session_manager=self.manager,
+            allowed_roots=[repo_root() / "testData"],
+        )
+
+    async def asyncTearDown(self) -> None:
+        await self.manager.close_all()
+
+    async def test_configured_allowed_roots_work_without_client_roots(self) -> None:
+        roots = await self.app.call_tool("dwg.list_roots", {})
+        self.assertEqual(roots["roots"][0]["uri"], test_data_root_uri())
+        self.assertEqual(roots["roots"][0]["name"], "testData")
+
+        opened = await self.app.call_tool("dwg.open_file", house_plan_open_args())
+        self.assertEqual(opened["rootUri"], test_data_root_uri())
+        self.assertEqual(opened["relativePath"], "house_plan.dwg")
+
+        closed = await self.app.call_tool(
+            "dwg.close_file",
+            {"documentId": opened["documentId"]},
+        )
+        self.assertTrue(closed["closed"])
+
+    async def test_configured_allowed_roots_reject_unknown_root_uri(self) -> None:
+        with self.assertRaisesRegex(ValueError, "dwg.list_roots"):
+            await self.app.call_tool(
+                "dwg.open_file",
+                {
+                    "rootUri": repo_root().resolve().as_uri(),
+                    "relativePath": "README.md",
+                },
+            )
+
+    def test_configured_allowed_roots_must_be_absolute(self) -> None:
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            DwgMcpApplication(allowed_roots=["testData"])

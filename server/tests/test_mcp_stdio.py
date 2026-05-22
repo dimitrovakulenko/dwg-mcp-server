@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 import unittest
 from pathlib import Path
@@ -15,16 +14,15 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def house_plan() -> str:
-    return str(repo_root() / "testData" / "house_plan.dwg")
+def test_data_root_uri() -> str:
+    return (repo_root() / "testData").resolve().as_uri()
 
 
-def house_plan_uri() -> str:
-    return (repo_root() / "testData" / "house_plan.dwg").resolve().as_uri()
-
-
-def dyn_blocks_uri() -> str:
-    return (repo_root() / "testData" / "dyn-blocks.dwg").resolve().as_uri()
+def open_args(relative_path: str = "house_plan.dwg") -> dict[str, str]:
+    return {
+        "rootUri": test_data_root_uri(),
+        "relativePath": relative_path,
+    }
 
 
 class McpStdioTests(unittest.TestCase):
@@ -35,7 +33,7 @@ class McpStdioTests(unittest.TestCase):
             env={
                 "PYTHONPATH": str(repo_root() / "server" / "src"),
             },
-            root_uris=[(repo_root() / "testData").resolve().as_uri()],
+            root_uris=[test_data_root_uri()],
         )
 
     def tearDown(self) -> None:
@@ -47,10 +45,17 @@ class McpStdioTests(unittest.TestCase):
 
         listed_tools = self.client.request("tools/list", {})
         tool_names = [tool["name"] for tool in listed_tools["result"]["tools"]]
+        self.assertIn("dwg.list_roots", tool_names)
         self.assertIn("dwg.open_file", tool_names)
         self.assertIn("dwg.describe_type", tool_names)
         self.assertIn("dwg.get_objects", tool_names)
         self.assertIn("dwg.query_objects", tool_names)
+
+        roots = self.client.request("tools/call", {"name": "dwg.list_roots", "arguments": {}})
+        self.assertEqual(
+            roots["result"]["structuredContent"]["roots"][0]["uri"],
+            test_data_root_uri(),
+        )
 
         described = self.client.request(
             "tools/call",
@@ -67,7 +72,7 @@ class McpStdioTests(unittest.TestCase):
             "tools/call",
             {
                 "name": "dwg.open_file",
-                "arguments": {"fileUri": house_plan_uri()},
+                "arguments": open_args(),
             },
         )
         document_id = opened["result"]["structuredContent"]["documentId"]
@@ -138,7 +143,7 @@ class McpStdioTests(unittest.TestCase):
             "tools/call",
             {
                 "name": "dwg.open_file",
-                "arguments": {"fileUri": house_plan_uri()},
+                "arguments": open_args(),
             },
         )
         document_id = opened["result"]["structuredContent"]["documentId"]
@@ -189,19 +194,19 @@ class McpStdioTests(unittest.TestCase):
             },
         )
 
-    def test_open_file_accepts_path_argument_under_roots(self) -> None:
+    def test_open_file_accepts_relative_path_under_roots(self) -> None:
         self.client.initialize()
 
         opened = self.client.request(
             "tools/call",
             {
                 "name": "dwg.open_file",
-                "arguments": {"path": house_plan()},
+                "arguments": open_args(),
             },
         )
         structured = opened["result"]["structuredContent"]
-        self.assertEqual(structured["path"], house_plan())
-        self.assertEqual(structured["fileUri"], house_plan_uri())
+        self.assertEqual(structured["rootUri"], test_data_root_uri())
+        self.assertEqual(structured["relativePath"], "house_plan.dwg")
 
         self.client.request(
             "tools/call",
@@ -211,7 +216,7 @@ class McpStdioTests(unittest.TestCase):
             },
         )
 
-    def test_open_file_is_rejected_outside_client_roots(self) -> None:
+    def test_open_file_rejects_unknown_root_uri(self) -> None:
         restricted_client = McpProcessClient(
             [sys.executable, "-m", "dwg_mcp_server"],
             cwd=repo_root(),
@@ -227,37 +232,90 @@ class McpStdioTests(unittest.TestCase):
             "tools/call",
             {
                 "name": "dwg.open_file",
-                "arguments": {"path": house_plan()},
+                "arguments": open_args(),
             },
         )
         self.assertTrue(denied["result"]["isError"])
-        self.assertIn("outside the client roots", denied["result"]["content"][0]["text"])
+        self.assertIn("rootUri must exactly match", denied["result"]["content"][0]["text"])
 
-    def test_open_file_error_explains_how_to_access_other_folders(self) -> None:
-        restricted_client = McpProcessClient(
+    def test_open_file_rejects_relative_path_traversal(self) -> None:
+        self.client.initialize()
+
+        denied = self.client.request(
+            "tools/call",
+            {
+                "name": "dwg.open_file",
+                "arguments": open_args("../README.md"),
+            },
+        )
+        self.assertTrue(denied["result"]["isError"])
+        self.assertIn("escapes", denied["result"]["content"][0]["text"])
+
+    def test_open_file_requires_client_roots(self) -> None:
+        client_without_roots = McpProcessClient(
             [sys.executable, "-m", "dwg_mcp_server"],
             cwd=repo_root(),
             env={
                 "PYTHONPATH": str(repo_root() / "server" / "src"),
-                "DWG_MCP_HOST_FOLDERS": str((repo_root() / "server").resolve()),
             },
-            root_uris=[repo_root().resolve().as_uri()],
         )
-        self.addCleanup(restricted_client.terminate)
+        self.addCleanup(client_without_roots.terminate)
 
-        restricted_client.initialize()
-        denied = restricted_client.request(
+        client_without_roots.initialize()
+        denied = client_without_roots.request(
             "tools/call",
             {
                 "name": "dwg.open_file",
-                "arguments": {"path": house_plan()},
+                "arguments": open_args(),
             },
         )
         self.assertTrue(denied["result"]["isError"])
-        text = denied["result"]["content"][0]["text"]
-        self.assertIn("Allowed folders", text)
-        self.assertIn("Copy the DWG there", text)
-        self.assertIn("DWG_MCP_HOST_FOLDERS", text)
+        self.assertIn("MCP client roots are required", denied["result"]["content"][0]["text"])
+
+    def test_allowed_root_args_work_without_client_roots(self) -> None:
+        client_with_allowed_root = McpProcessClient(
+            [
+                sys.executable,
+                "-m",
+                "dwg_mcp_server",
+                "--allowed-root",
+                str(repo_root() / "testData"),
+            ],
+            cwd=repo_root(),
+            env={
+                "PYTHONPATH": str(repo_root() / "server" / "src"),
+            },
+        )
+        self.addCleanup(client_with_allowed_root.terminate)
+
+        client_with_allowed_root.initialize()
+        roots = client_with_allowed_root.request(
+            "tools/call",
+            {"name": "dwg.list_roots", "arguments": {}},
+        )
+        self.assertEqual(
+            roots["result"]["structuredContent"]["roots"][0]["uri"],
+            test_data_root_uri(),
+        )
+
+        opened = client_with_allowed_root.request(
+            "tools/call",
+            {
+                "name": "dwg.open_file",
+                "arguments": open_args(),
+            },
+        )
+        structured = opened["result"]["structuredContent"]
+        self.assertEqual(structured["rootUri"], test_data_root_uri())
+        self.assertEqual(structured["relativePath"], "house_plan.dwg")
+
+        client_with_allowed_root.request(
+            "tools/call",
+            {
+                "name": "dwg.close_file",
+                "arguments": {"documentId": structured["documentId"]},
+            },
+        )
 
     def test_dynamic_block_history_xrecord_is_exposed_via_mcp(self) -> None:
         self.client.initialize()
@@ -266,7 +324,7 @@ class McpStdioTests(unittest.TestCase):
             "tools/call",
             {
                 "name": "dwg.open_file",
-                "arguments": {"fileUri": dyn_blocks_uri()},
+                "arguments": open_args("dyn-blocks.dwg"),
             },
         )
         document_id = opened["result"]["structuredContent"]["documentId"]
@@ -349,7 +407,7 @@ class McpStdioTests(unittest.TestCase):
             "tools/call",
             {
                 "name": "dwg.open_file",
-                "arguments": {"fileUri": house_plan_uri()},
+                "arguments": open_args(),
             },
         )
         document_id = opened["result"]["structuredContent"]["documentId"]

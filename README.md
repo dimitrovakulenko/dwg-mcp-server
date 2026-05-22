@@ -13,20 +13,17 @@ The npm package launches the published Docker image.
 
 ```bash
 codex mcp add dwg-mcp \
-  --env DWG_MCP_HOST_FOLDERS=/absolute/path/to/your/dwg/folder \
+  --env DWG_MCP_ALLOWED_ROOTS="$HOME/Downloads" \
   -- npx -y @dmytro-prototypes/dwg-mcp-server
 ```
 
-or simply 
-
-```bash
-codex mcp add dwg-mcp -- npx -y @dmytro-prototypes/dwg-mcp-server
-```
+Codex does not currently provide MCP client roots to stdio MCP servers. Configure
+explicit allowed roots for the folders that contain your drawings.
 
 ### Claude
 
 ```bash
-claude mcp add --scope user --transport stdio --env DWG_MCP_HOST_FOLDERS=/absolute/path/to/your/dwg/folder dwg-mcp -- npx -y @dmytro-prototypes/dwg-mcp-server
+claude mcp add --scope user --transport stdio dwg-mcp -- npx -y @dmytro-prototypes/dwg-mcp-server
 ```
 
 ### Cursor
@@ -36,23 +33,23 @@ claude mcp add --scope user --transport stdio --env DWG_MCP_HOST_FOLDERS=/absolu
   "mcpServers": {
     "dwg-mcp": {
       "command": "npx",
-      "args": ["-y", "@dmytro-prototypes/dwg-mcp-server"],
-      "env": {
-        "DWG_MCP_HOST_FOLDERS": "${workspaceFolder}"
-      }
+      "args": ["-y", "@dmytro-prototypes/dwg-mcp-server"]
     }
   }
 }
 ```
 
-DWG files must be opened from allowed folders only.
-Set `DWG_MCP_HOST_FOLDERS` to one or more absolute host folders separated by `;`.
+DWG files must be opened from roots listed by `dwg.list_roots`. The server first
+asks the MCP client for `roots/list`. If the client does not support MCP roots,
+configure explicit allowed roots with `--allowed-root` or
+`DWG_MCP_ALLOWED_ROOTS`.
 
 ## Exposed Tools
 
 | Tool | Purpose |
 | --- | --- |
-| `dwg.open_file` | Open a DWG from an absolute path or `file://` URI and return a `documentId`. |
+| `dwg.list_roots` | List MCP client roots that can be used with `dwg.open_file`. |
+| `dwg.open_file` | Open a DWG from `rootUri` plus `relativePath` and return a `documentId`. |
 | `dwg.close_file` | Close an opened document and release its worker process. |
 | `dwg.list_types` | List the globally supported DWG types known to the backend. |
 | `dwg.list_file_types` | List only the types that are present in a specific opened DWG. |
@@ -62,10 +59,11 @@ Set `DWG_MCP_HOST_FOLDERS` to one or more absolute host folders separated by `;`
 
 A typical flow is:
 
-1. Open a file with `dwg.open_file`.
-2. Inspect supported or file-local types with `dwg.list_types`, `dwg.list_file_types`, or `dwg.describe_type`.
-3. Fetch known handles with `dwg.get_objects` or search the drawing with `dwg.query_objects`.
-4. Close the session with `dwg.close_file`.
+1. Discover available roots with `dwg.list_roots`.
+2. Open a file with `dwg.open_file`, passing a returned `rootUri` and a DWG path relative to that root.
+3. Inspect supported or file-local types with `dwg.list_types`, `dwg.list_file_types`, or `dwg.describe_type`.
+4. Fetch known handles with `dwg.get_objects` or search the drawing with `dwg.query_objects`.
+5. Close the session with `dwg.close_file`.
 
 ## Architecture
 
@@ -95,12 +93,30 @@ This is what makes queries over blocks, layers, layouts, references, and related
 
 ### Access and packaging
 
-The server accepts absolute local paths or `file://` URIs only.
-If the MCP client exposes roots, opened DWGs must stay inside those roots.
-If `DWG_MCP_HOST_FOLDERS` is configured, opened DWGs must also stay inside one of those allowed folders.
+The server opens files only through roots returned by `dwg.list_roots`.
+`dwg.open_file` accepts a `rootUri` returned by `dwg.list_roots` and a
+`relativePath` under that root. Absolute host paths and arbitrary `file://` file
+URIs are not accepted by the MCP tool API.
 
-The Docker wrapper mounts those host folders into the container read-only and forwards the same folder list to the Python host.
-The Docker image itself is built in three stages: LibreDWG, the Rust worker, and the final Python runtime image.
+Roots come from the MCP client when it supports `roots/list`. For clients that do
+not support MCP roots, configure explicit allowed roots:
+
+```bash
+python3 -m dwg_mcp_server --allowed-root "$HOME/Downloads"
+```
+
+or:
+
+```bash
+DWG_MCP_ALLOWED_ROOTS="$HOME/Downloads;$HOME/Documents/dwg" \
+python3 -m dwg_mcp_server
+```
+
+The Docker wrapper can mount host folders into the container read-only at their
+original absolute paths so client root URIs still resolve inside the container.
+The Docker image itself unpacks a prebuilt LibreDWG bundle, builds the Rust
+worker against it, and copies only the static-linked worker plus schema files
+into the final Python runtime image.
 
 ## Build and Test From Source
 
@@ -119,6 +135,24 @@ Local source builds use the vendored `third_party/libredwg` submodule by default
 git submodule update --init --recursive
 bash scripts/build-libredwg.sh
 ```
+
+### Prebuilt LibreDWG bundles
+
+CI and Docker builds use a Git LFS LibreDWG bundle instead of rebuilding
+LibreDWG on every run. The current CI bundle target is:
+
+```text
+prebuilt/libredwg/x86_64-unknown-linux-gnu.tar.gz
+```
+
+Refresh it only when the LibreDWG submodule or native build inputs change:
+
+```bash
+bash scripts/build-linux-libredwg-prebuilt.sh x86_64-unknown-linux-gnu
+```
+
+For local macOS debugging, keep using `bash scripts/build-libredwg.sh` and the
+local Rust build; the Linux prebuilt archive is for CI and Docker.
 
 ### Build and test
 
@@ -155,11 +189,21 @@ bash scripts/build-docker-mcp-server.sh
 Run the server and expose specific host folders read-only:
 
 ```bash
-DWG_MCP_HOST_FOLDERS="$HOME/Documents;$HOME/Desktop/dwg" \
+DWG_MCP_DOCKER_MOUNTS="$HOME/Documents;$HOME/Desktop/dwg" \
 bash scripts/run-docker-mcp-server.sh
 ```
 
-By default, the Docker launcher exposes `~/Documents`.
+For clients without MCP roots, set `DWG_MCP_ALLOWED_ROOTS` instead:
+
+```bash
+DWG_MCP_ALLOWED_ROOTS="$HOME/Documents;$HOME/Desktop/dwg" \
+bash scripts/run-docker-mcp-server.sh
+```
+
+By default, the Docker launcher mounts `DWG_MCP_ALLOWED_ROOTS`, then
+`~/Documents` when no roots are configured. Access is still authorized by MCP
+client roots or explicit allowed roots; Docker mounts only make those paths
+visible inside the container.
 
 ### Clean rebuild
 

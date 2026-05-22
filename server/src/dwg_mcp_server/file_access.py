@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Sequence
 from urllib.parse import unquote, urlparse
@@ -52,21 +51,23 @@ def ensure_within_roots(
     )
 
 
-def configured_access_folders() -> list[Path]:
-    raw_value = os.getenv("DWG_MCP_HOST_FOLDERS", "").strip()
-    if not raw_value:
-        return []
+def resolve_root_relative_path(root_path: Path, relative_path_text: str) -> Path:
+    relative_path = Path(relative_path_text)
+    if not relative_path_text.strip():
+        raise ValueError("relativePath must not be empty")
+    if relative_path.is_absolute():
+        raise ValueError("relativePath must be relative to the selected MCP root")
 
-    folders: list[Path] = []
-    for chunk in raw_value.split(";"):
-        candidate = chunk.strip()
-        if not candidate:
-            continue
-        folders.append(normalize_local_path(candidate))
-    return folders
+    resolved_root = root_path.resolve(strict=True)
+    resolved_file = (resolved_root / relative_path).resolve(strict=True)
+    try:
+        resolved_file.relative_to(resolved_root)
+    except ValueError as error:
+        raise ValueError("relativePath escapes the selected MCP root") from error
 
+    if not resolved_file.is_file():
+        raise ValueError("relativePath must point to a regular DWG file")
+    if resolved_file.suffix.lower() != ".dwg":
+        raise ValueError("relativePath must point to a .dwg file")
 
-def format_access_folders(folders: Sequence[Path]) -> str:
-    if not folders:
-        return "none configured"
-    return ", ".join(str(folder) for folder in folders)
+    return resolved_file

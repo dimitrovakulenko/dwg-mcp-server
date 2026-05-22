@@ -1,0 +1,35 @@
+# Builds a minimal LibreDWG prebuilt bundle for CI and Docker builds.
+
+FROM rust:1-bookworm AS builder
+
+ARG LIBREDWG_TARGET=x86_64-unknown-linux-gnu
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
+        bison \
+        build-essential \
+        flex \
+        libtool \
+        make \
+        texinfo \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY third_party/libredwg /build/libredwg
+
+RUN cd /build/libredwg \
+    && perl -0pi -e 's/\nif command -v git >\/dev\/null\nthen\n    git submodule update --init --recursive\nelse\n    curl https:\/\/raw\.githubusercontent\.com\/zserge\/jsmn\/master\/jsmn\.h -o jsmn\/jsmn\.h\nfi/\n/' autogen.sh \
+    && libtoolize -i \
+    && ./autogen.sh \
+    && ./configure --disable-docs \
+    && make -j"$(nproc)"
+
+RUN mkdir -p /bundle/src/.libs /bundle/include /out \
+    && cp /build/libredwg/src/.libs/libredwg.a /bundle/src/.libs/ \
+    && cp /build/libredwg/src/*.h /bundle/src/ \
+    && cp /build/libredwg/src/classes.c /bundle/src/ \
+    && cp /build/libredwg/src/dynapi.c /bundle/src/ \
+    && cp /build/libredwg/include/*.h /bundle/include/ \
+    && tar -czf "/out/${LIBREDWG_TARGET}.tar.gz" -C /bundle .

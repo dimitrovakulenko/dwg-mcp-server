@@ -18,12 +18,15 @@ def image_tag() -> str:
     return "dwg-mcp-server"
 
 
-def house_plan() -> str:
-    return str(repo_root() / "testData" / "house_plan.dwg")
+def test_data_root_uri() -> str:
+    return (repo_root() / "testData").resolve().as_uri()
 
 
-def dyn_blocks() -> str:
-    return str(repo_root() / "testData" / "dyn-blocks.dwg")
+def open_args(relative_path: str) -> dict[str, str]:
+    return {
+        "rootUri": test_data_root_uri(),
+        "relativePath": relative_path,
+    }
 
 
 def docker_available() -> bool:
@@ -66,7 +69,8 @@ class DockerSmokeTests(unittest.TestCase):
                 str(repo_root() / "scripts" / "run-docker-mcp-server.sh"),
             ],
             cwd=repo_root(),
-            env={"DWG_MCP_HOST_FOLDERS": str(repo_root() / "testData")},
+            env={"DWG_MCP_DOCKER_MOUNTS": str(repo_root() / "testData")},
+            root_uris=[test_data_root_uri()],
         )
 
     def tearDown(self) -> None:
@@ -79,7 +83,7 @@ class DockerSmokeTests(unittest.TestCase):
             "tools/call",
             {
                 "name": "dwg.open_file",
-                "arguments": {"path": house_plan()},
+                "arguments": open_args("house_plan.dwg"),
             },
         )
         document_id = opened["result"]["structuredContent"]["documentId"]
@@ -116,7 +120,7 @@ class DockerSmokeTests(unittest.TestCase):
             "tools/call",
             {
                 "name": "dwg.open_file",
-                "arguments": {"path": dyn_blocks()},
+                "arguments": open_args("dyn-blocks.dwg"),
             },
         )
         document_id = opened["result"]["structuredContent"]["documentId"]

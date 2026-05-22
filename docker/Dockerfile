@@ -2,41 +2,28 @@
 # dwg-mcp-server image
 #
 # Three stages:
-#   1. libredwg-builder  — compile LibreDWG; shared libs under /opt/libredwg
-#   2. worker-builder    — compile dwg-worker (Rust) against vendored LibreDWG
-#   3. runtime           — Python MCP server + worker binary + libredwg.so only
+#   1. libredwg-prebuilt — unpack a Git LFS LibreDWG bundle
+#   2. worker-builder    — compile dwg-worker (Rust) against prebuilt LibreDWG
+#   3. runtime           — Python MCP server + static-linked worker binary
 #
 # Runtime copies use COPY --chown so we never chown huge trees (saves image size).
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Stage 1: LibreDWG (C autotools) → /opt/libredwg
+# Stage 1: LibreDWG prebuilt bundle -> /opt/libredwg
 # -----------------------------------------------------------------------------
-FROM rust:1-bookworm AS libredwg-builder
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        autoconf \
-        automake \
-        bison \
-        build-essential \
-        flex \
-        libtool \
-        make \
-        texinfo \
-    && rm -rf /var/lib/apt/lists/*
+FROM rust:1-bookworm AS libredwg-prebuilt
 
 WORKDIR /build
-COPY third_party/libredwg /build/libredwg
-
-RUN cd /build/libredwg \
-    && perl -0pi -e 's/\nif command -v git >\/dev\/null\nthen\n    git submodule update --init --recursive\nelse\n    curl https:\/\/raw\.githubusercontent\.com\/zserge\/jsmn\/master\/jsmn\.h -o jsmn\/jsmn\.h\nfi/\n/' autogen.sh \
-    && libtoolize -i \
-    && ./autogen.sh \
-    && ./configure --prefix=/opt/libredwg \
-    && make -j"$(nproc)" \
-    && make install \
-    && find /opt/libredwg -name '*.a' -delete
+ARG LIBREDWG_TARGET=x86_64-unknown-linux-gnu
+COPY prebuilt/libredwg/${LIBREDWG_TARGET}.tar.gz /tmp/libredwg.tar.gz
+RUN mkdir -p /opt/libredwg \
+    && tar -xzf /tmp/libredwg.tar.gz -C /opt/libredwg \
+    && test -f /opt/libredwg/src/.libs/libredwg.a \
+    && test -f /opt/libredwg/src/config.h \
+    && test -f /opt/libredwg/src/classes.c \
+    && test -f /opt/libredwg/src/dynapi.c \
+    && test -f /opt/libredwg/include/dwg_api.h
 
 # -----------------------------------------------------------------------------
 # Stage 2: dwg-worker binary (Rust)
@@ -54,7 +41,10 @@ RUN apt-get update \
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY --from=libredwg-builder /build/libredwg /app/third_party/libredwg
+COPY --from=libredwg-prebuilt /opt/libredwg /opt/libredwg
+
+ENV LIBREDWG_ROOT_DIR=/opt/libredwg
+ENV LIBREDWG_SOURCE_ROOT=/opt/libredwg/src
 
 RUN cargo build -p dwg-worker --release \
     && strip /app/target/release/dwg-worker
@@ -68,23 +58,17 @@ LABEL io.modelcontextprotocol.server.name="io.github.dimitrovakulenko/dwg-mcp-se
 
 ENV PIP_NO_CACHE_DIR=1
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        libxml2 \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN useradd --create-home --shell /bin/bash appuser \
-    && mkdir -p /opt/libredwg/lib /app/bin /app/third_party/libredwg/src \
-    && chown -R appuser:appuser /app /opt/libredwg
+    && mkdir -p /app/bin /app/third_party/libredwg/src \
+    && chown -R appuser:appuser /app
 
-# libredwg.so (runtime) + two C files (schema for dwg-libredwg)
-COPY --chown=appuser:appuser --from=libredwg-builder /opt/libredwg/lib /opt/libredwg/lib
-COPY --chown=appuser:appuser --from=libredwg-builder \
-    /build/libredwg/src/classes.c \
-    /build/libredwg/src/dynapi.c \
+# Two C files are used at runtime for schema extraction.
+COPY --chown=appuser:appuser --from=libredwg-prebuilt \
+    /opt/libredwg/src/classes.c \
+    /opt/libredwg/src/dynapi.c \
     /app/third_party/libredwg/src/
 
-# Rust worker (links libredwg at build time; loads libredwg.so at runtime via LD_LIBRARY_PATH)
+# Rust worker links LibreDWG statically at build time.
 COPY --chown=appuser:appuser --from=worker-builder /app/target/release/dwg-worker /app/bin/dwg-worker
 
 # MCP server source (installed into site-packages by pip below)
@@ -96,7 +80,6 @@ RUN python -m pip install --no-cache-dir /app/server \
     && rm -rf /root/.cache/pip
 
 ENV DWG_WORKER_BIN=/app/bin/dwg-worker
-ENV LD_LIBRARY_PATH=/opt/libredwg/lib
 ENV LIBREDWG_SOURCE_ROOT=/app/third_party/libredwg/src
 ENV PYTHONPATH=/app/server/src
 
