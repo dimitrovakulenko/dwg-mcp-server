@@ -58,6 +58,7 @@ jobs:
       - name: Python integration tests (excludes Docker-only tests)
         env:
           DWG_WORKER_BIN: ${{ github.workspace }}/target/debug/dwg-worker
+          LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/.cache/libredwg-root/src
           PYTHONPATH: ${{ github.workspace }}/server/src
         run: |
           python3 -m unittest \
