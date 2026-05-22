@@ -23,13 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
           ref: main
           lfs: true
-
-      - name: Init submodules
-        run: git submodule update --init --recursive
 
       - name: Resolve image tags
         id: tags
