@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from dwg_mcp_server.app import DwgMcpApplication
 from dwg_mcp_server.worker_client import SessionManager, UnknownDocumentError
@@ -313,6 +314,29 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
     async def test_open_file_rejects_legacy_path_arguments(self) -> None:
         with self.assertRaisesRegex(ValueError, "rootUri"):
             await self.app.call_tool("dwg.open_file", {"path": house_plan()})
+
+    async def test_open_file_explains_unmounted_docker_root(self) -> None:
+        missing_root = Path("/tmp/dwg-missing-root").resolve()
+
+        async def list_client_roots() -> list[dict[str, str]]:
+            return [{"uri": missing_root.as_uri(), "name": "missing"}]
+
+        self.app._list_client_roots = list_client_roots  # type: ignore[method-assign]
+        with patch.dict(
+            "os.environ",
+            {
+                "DWG_MCP_RUNNING_IN_DOCKER": "1",
+                "DWG_MCP_DOCKER_MOUNTS": "/mounted",
+            },
+        ):
+            with self.assertRaisesRegex(ValueError, "DWG_MCP_DOCKER_MOUNTS"):
+                await self.app.call_tool(
+                    "dwg.open_file",
+                    {
+                        "rootUri": missing_root.as_uri(),
+                        "relativePath": "drawing.dwg",
+                    },
+                )
 
     async def test_configured_allowed_roots_are_added_to_client_roots(self) -> None:
         self.app.allowed_roots = ((repo_root() / "server").resolve(),)

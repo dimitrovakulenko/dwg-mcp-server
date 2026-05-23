@@ -8,6 +8,8 @@ Agents can open a DWG, inspect available types, fetch objects by handle, and que
 
 Use DWG MCP Server from the MCP client of your choice.
 The npm package launches the published Docker image.
+The Docker launcher mounts `$HOME` by default. For drawings outside `$HOME`, set
+`DWG_MCP_DOCKER_MOUNTS`.
 
 If your MCP client, AI agent, or test harness does not support MCP roots, set
 `DWG_MCP_ALLOWED_ROOTS` to the folders that should be accessible.
@@ -111,13 +113,12 @@ python3 -m dwg_mcp_server
 `DWG_MCP_ALLOWED_ROOTS` is an authorization fallback for clients without roots.
 It should be a semicolon-separated list of absolute directories.
 
-The Docker wrapper can mount host folders into the container read-only at their
-original absolute paths so drawings in those folders are visible inside the
-container.
-For clients that provide MCP roots, set `DWG_MCP_DOCKER_MOUNTS` when those roots
-are outside the launcher's default mount. For clients without MCP roots,
-`DWG_MCP_ALLOWED_ROOTS` is used both as the explicit allowed-root list and, by
-default, as the Docker mount list.
+Docker is separate from MCP roots: roots authorize access, mounts make host
+folders visible inside the container. The npm Docker launcher mounts `$HOME` by
+default. For drawings outside `$HOME`, set `DWG_MCP_DOCKER_MOUNTS`.
+
+For clients without MCP roots, `DWG_MCP_ALLOWED_ROOTS` is also used as the Docker
+mount list unless `DWG_MCP_DOCKER_MOUNTS` is set.
 
 The Docker image itself unpacks a prebuilt LibreDWG bundle, builds the Rust
 worker against it, and copies only the static-linked worker plus schema files

@@ -29,7 +29,7 @@
         },
         {
           "name": "DWG_MCP_DOCKER_MOUNTS",
-          "description": "Semicolon-separated host folders mounted read-only into the Docker launcher at their original absolute paths. Access is still authorized by MCP client roots or DWG_MCP_ALLOWED_ROOTS. Defaults to DWG_MCP_ALLOWED_ROOTS, then ~/Documents when omitted.",
+          "description": "Semicolon-separated host folders mounted read-only into Docker at their original absolute paths. Access is still authorized by MCP roots or DWG_MCP_ALLOWED_ROOTS. Defaults to DWG_MCP_ALLOWED_ROOTS, then $HOME.",
           "format": "string",
           "isRequired": false,
           "isSecret": false,

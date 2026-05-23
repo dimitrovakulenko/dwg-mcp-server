@@ -3,11 +3,20 @@ set -euo pipefail
 
 # Host folders to mount read-only at their original absolute paths
 # (semicolon-separated). If DWG_MCP_DOCKER_MOUNTS is omitted, configured
-# allowed roots are mounted. If both are omitted, default to $HOME/Documents.
+# allowed roots are mounted. If both are omitted, default to $HOME.
 #
 # Access is authorized by MCP client roots or explicit DWG_MCP_ALLOWED_ROOTS
 # inside the server. Mounts only make those paths visible inside the container.
-HOST_FOLDERS="${DWG_MCP_DOCKER_MOUNTS:-${DWG_MCP_ALLOWED_ROOTS:-$HOME/Documents}}"
+if [[ -n "${DWG_MCP_DOCKER_MOUNTS:-}" ]]; then
+  HOST_FOLDERS="$DWG_MCP_DOCKER_MOUNTS"
+  MOUNT_SOURCE="DWG_MCP_DOCKER_MOUNTS"
+elif [[ -n "${DWG_MCP_ALLOWED_ROOTS:-}" ]]; then
+  HOST_FOLDERS="$DWG_MCP_ALLOWED_ROOTS"
+  MOUNT_SOURCE="DWG_MCP_ALLOWED_ROOTS"
+else
+  HOST_FOLDERS="$HOME"
+  MOUNT_SOURCE="\$HOME"
+fi
 
 MOUNTS=()
 ENV_ARGS=()
@@ -15,6 +24,8 @@ ENV_ARGS=()
 if [[ -n "${DWG_MCP_ALLOWED_ROOTS:-}" ]]; then
   ENV_ARGS+=(-e "DWG_MCP_ALLOWED_ROOTS=$DWG_MCP_ALLOWED_ROOTS")
 fi
+ENV_ARGS+=(-e "DWG_MCP_RUNNING_IN_DOCKER=1")
+ENV_ARGS+=(-e "DWG_MCP_DOCKER_MOUNTS=$HOST_FOLDERS")
 
 IFS=';' read -r -a FOLDER_ITEMS <<< "$HOST_FOLDERS"
 for raw_folder in "${FOLDER_ITEMS[@]}"; do
@@ -28,7 +39,7 @@ for raw_folder in "${FOLDER_ITEMS[@]}"; do
 done
 
 if [[ ${#MOUNTS[@]} -eq 0 ]]; then
-  echo "DWG_MCP_DOCKER_MOUNTS does not point to any existing directories: $HOST_FOLDERS" >&2
+  echo "$MOUNT_SOURCE does not point to any existing directories: $HOST_FOLDERS" >&2
   exit 1
 fi
 

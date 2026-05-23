@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOST_FOLDERS="${DWG_MCP_DOCKER_MOUNTS:-${DWG_MCP_ALLOWED_ROOTS:-$HOME/Documents}}"
+if [[ -n "${DWG_MCP_DOCKER_MOUNTS:-}" ]]; then
+  HOST_FOLDERS="$DWG_MCP_DOCKER_MOUNTS"
+  MOUNT_SOURCE="DWG_MCP_DOCKER_MOUNTS"
+elif [[ -n "${DWG_MCP_ALLOWED_ROOTS:-}" ]]; then
+  HOST_FOLDERS="$DWG_MCP_ALLOWED_ROOTS"
+  MOUNT_SOURCE="DWG_MCP_ALLOWED_ROOTS"
+else
+  HOST_FOLDERS="$HOME"
+  MOUNT_SOURCE="\$HOME"
+fi
 IMAGE="ghcr.io/dimitrovakulenko/dwg-mcp-server:latest"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -15,6 +24,8 @@ ENV_ARGS=()
 if [[ -n "${DWG_MCP_ALLOWED_ROOTS:-}" ]]; then
   ENV_ARGS+=(-e "DWG_MCP_ALLOWED_ROOTS=$DWG_MCP_ALLOWED_ROOTS")
 fi
+ENV_ARGS+=(-e "DWG_MCP_RUNNING_IN_DOCKER=1")
+ENV_ARGS+=(-e "DWG_MCP_DOCKER_MOUNTS=$HOST_FOLDERS")
 
 IFS=';' read -r -a FOLDER_ITEMS <<< "$HOST_FOLDERS"
 for raw_folder in "${FOLDER_ITEMS[@]}"; do
@@ -29,7 +40,7 @@ for raw_folder in "${FOLDER_ITEMS[@]}"; do
 done
 
 if [[ ${#MOUNTS[@]} -eq 0 ]]; then
-  echo "DWG_MCP_DOCKER_MOUNTS does not point to any existing directories: $HOST_FOLDERS" >&2
+  echo "$MOUNT_SOURCE does not point to any existing directories: $HOST_FOLDERS" >&2
   exit 1
 fi
 
