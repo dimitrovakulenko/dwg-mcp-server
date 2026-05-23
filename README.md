@@ -18,7 +18,7 @@ If your MCP client, AI agent, or test harness does not support MCP roots, set
 
 ```bash
 codex mcp add dwg-mcp \
-  --env DWG_MCP_ALLOWED_ROOTS="$HOME/Downloads" \
+  --env DWG_MCP_ALLOWED_ROOTS="$HOME" \
   -- npx -y @dmytro-prototypes/dwg-mcp-server
 ```
 
