@@ -470,6 +470,16 @@ unsafe fn read_special_properties(
                 properties.insert("xdata".to_owned(), value);
             }
         }
+        raw_type_name if raw_type_name.starts_with("BLOCK") => {
+            if let Some(value) = unsafe {
+                read_json_property(
+                    object,
+                    libredwg_sys::bridge_dwg_object_block_connections_json,
+                )
+            } {
+                properties.insert("connections".to_owned(), value);
+            }
+        }
         "EVALUATION_GRAPH" => {
             if let Some(value) = unsafe {
                 read_json_property(

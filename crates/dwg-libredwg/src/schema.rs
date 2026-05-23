@@ -635,7 +635,51 @@ fn extend_custom_properties(
         });
     }
 
+    if has_dynamic_block_connections(source_name) {
+        push_if_missing(PropertyDefinition {
+            name: "connections".to_owned(),
+            value_kind: "array".to_owned(),
+            description: Some(
+                "Dynamic block connection codes and names for block actions or parameters."
+                    .to_owned(),
+            ),
+            queryable: false,
+            reference_target: None,
+        });
+    }
+
     properties
+}
+
+fn has_dynamic_block_connections(source_name: &str) -> bool {
+    matches!(
+        source_name,
+        "BLOCKALIGNEDCONSTRAINTPARAMETER"
+            | "BLOCKALIGNMENTPARAMETER"
+            | "BLOCKANGULARCONSTRAINTPARAMETER"
+            | "BLOCKARRAYACTION"
+            | "BLOCKBASEPOINTPARAMETER"
+            | "BLOCKDIAMETRICCONSTRAINTPARAMETER"
+            | "BLOCKFLIPACTION"
+            | "BLOCKFLIPPARAMETER"
+            | "BLOCKHORIZONTALCONSTRAINTPARAMETER"
+            | "BLOCKLINEARCONSTRAINTPARAMETER"
+            | "BLOCKLINEARPARAMETER"
+            | "BLOCKLOOKUPPARAMETER"
+            | "BLOCKMOVEACTION"
+            | "BLOCKPOINTPARAMETER"
+            | "BLOCKPOLARPARAMETER"
+            | "BLOCKPOLARSTRETCHACTION"
+            | "BLOCKRADIALCONSTRAINTPARAMETER"
+            | "BLOCKROTATEACTION"
+            | "BLOCKROTATIONPARAMETER"
+            | "BLOCKSCALEACTION"
+            | "BLOCKSTRETCHACTION"
+            | "BLOCKUSERPARAMETER"
+            | "BLOCKVERTICALCONSTRAINTPARAMETER"
+            | "BLOCKVISIBILITYPARAMETER"
+            | "BLOCKXYPARAMETER"
+    )
 }
 
 fn choose_default_select(property_names: &[String]) -> Vec<String> {

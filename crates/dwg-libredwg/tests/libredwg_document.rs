@@ -883,6 +883,105 @@ fn dyn_blocks_exposes_evaluation_graph_nodes_and_edges() {
 }
 
 #[test]
+fn dyn_blocks_exposes_block_action_connections() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&dyn_blocks_fixture_path())
+        .expect("fixture should open");
+
+    let actions = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("AcDbBlockMoveAction".to_owned()),
+            generic_type: None,
+            where_clauses: Vec::new(),
+            scope: None,
+            relations: Vec::new(),
+            sort: Vec::new(),
+            mode: QueryMode::Handles,
+            projection: Projection::Summary,
+            select: None,
+            limit: 10,
+            cursor: None,
+        })
+        .expect("block move actions should be queryable");
+    assert!(!actions.handles.is_empty());
+
+    let action = document
+        .get_objects(GetObjectsRequest {
+            handles: vec![actions.handles[0].clone()],
+            projection: Projection::Full,
+            select: Some(vec!["connections".to_owned()]),
+        })
+        .expect("block action should load");
+    assert!(action.missing_handles.is_empty());
+
+    let connections = action.items[0]
+        .properties
+        .get("connections")
+        .and_then(|value| value.as_array())
+        .expect("connections array");
+    assert_eq!(connections.len(), 2);
+    assert!(connections.iter().all(|connection| {
+        connection.get("index").is_some()
+            && connection.get("code").is_some()
+            && connection
+                .get("name")
+                .and_then(|name| name.as_str())
+                .is_some_and(|name| !name.is_empty())
+    }));
+}
+
+#[test]
+fn dyn_blocks_exposes_block_parameter_connections() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&dyn_blocks_fixture_path())
+        .expect("fixture should open");
+
+    let parameters = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("AcDbBlockLinearParameter".to_owned()),
+            generic_type: None,
+            where_clauses: Vec::new(),
+            scope: None,
+            relations: Vec::new(),
+            sort: Vec::new(),
+            mode: QueryMode::Handles,
+            projection: Projection::Summary,
+            select: None,
+            limit: 10,
+            cursor: None,
+        })
+        .expect("block linear parameters should be queryable");
+    assert!(!parameters.handles.is_empty());
+
+    let parameter = document
+        .get_objects(GetObjectsRequest {
+            handles: vec![parameters.handles[0].clone()],
+            projection: Projection::Full,
+            select: Some(vec!["connections".to_owned()]),
+        })
+        .expect("block parameter should load");
+    assert!(parameter.missing_handles.is_empty());
+
+    let connections = parameter.items[0]
+        .properties
+        .get("connections")
+        .and_then(|value| value.as_array())
+        .expect("connections array");
+    assert!(connections.len() >= 4);
+    assert!(connections.iter().all(|connection| {
+        connection.get("property").is_some()
+            && connection.get("index").is_some()
+            && connection.get("code").is_some()
+            && connection
+                .get("name")
+                .and_then(|name| name.as_str())
+                .is_some_and(|name| !name.is_empty())
+    }));
+}
+
+#[test]
 fn worker_lists_types_with_regex_and_pagination() {
     let _guard = lock_libredwg();
     let mut server = StdioHandler::new(LibreDwgFactory);

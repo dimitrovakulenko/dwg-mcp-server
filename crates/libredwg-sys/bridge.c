@@ -1317,6 +1317,224 @@ failed:
   return NULL;
 }
 
+static bool
+bridge_json_append_block_connection (BridgeJsonBuffer *buffer,
+                                     const Dwg_Object *obj, const char *property,
+                                     BITCODE_BL index, BITCODE_BL code,
+                                     BITCODE_T name, bool *is_first)
+{
+  if (!buffer || !is_first)
+    return false;
+
+  if (!*is_first && !bridge_json_buffer_append_char (buffer, ','))
+    return false;
+  *is_first = false;
+
+  if (!bridge_json_buffer_append_char (buffer, '{'))
+    return false;
+  if (property
+      && (!bridge_json_buffer_append_cstr (buffer, "\"property\":")
+          || !bridge_json_buffer_append_json_string (buffer, property)
+          || !bridge_json_buffer_append_char (buffer, ',')))
+    return false;
+  if (!bridge_json_buffer_appendf (
+          buffer, "\"index\":%lld,\"code\":%lld,\"name\":",
+          (long long)index, (long long)code))
+    return false;
+
+  if (obj && obj->parent && IS_FROM_TU_DWG (obj->parent) && name)
+    {
+      char *utf8 = bit_convert_TU ((BITCODE_TU)name);
+      bool ok = bridge_json_buffer_append_json_string (buffer, utf8);
+      free (utf8);
+      if (!ok)
+        return false;
+    }
+  else if (!bridge_json_buffer_append_json_string (buffer, name))
+    return false;
+
+  if (!bridge_json_buffer_append_char (buffer, '}'))
+    return false;
+
+  return true;
+}
+
+static bool
+bridge_json_append_action_connections (BridgeJsonBuffer *buffer,
+                                       const Dwg_Object *obj,
+                                       const Dwg_BLOCKACTION_connectionpts *items,
+                                       BITCODE_BL count, bool *is_first)
+{
+  if (!buffer || !items || !is_first)
+    return false;
+
+  for (BITCODE_BL index = 0; index < count; index++)
+    {
+      if (!bridge_json_append_block_connection (
+              buffer, obj, NULL, index, items[index].code, items[index].name,
+              is_first))
+        return false;
+    }
+
+  return true;
+}
+
+static bool
+bridge_json_append_parameter_connections (BridgeJsonBuffer *buffer,
+                                          const Dwg_Object *obj,
+                                          const char *property,
+                                          const Dwg_BLOCKPARAMETER_PropInfo *info,
+                                          bool *is_first)
+{
+  if (!buffer || !property || !info || !is_first)
+    return false;
+
+  if (info->num_connections > 1024)
+    return false;
+  if (info->num_connections > 0 && !info->connections)
+    return false;
+
+  for (BITCODE_BL index = 0; index < info->num_connections; index++)
+    {
+      if (!bridge_json_append_block_connection (
+              buffer, obj, property, index, info->connections[index].code,
+              info->connections[index].name, is_first))
+        return false;
+    }
+
+  return true;
+}
+
+char *
+bridge_dwg_object_block_connections_json (const Dwg_Object *obj)
+{
+  const char *name;
+  bool first = true;
+  bool matched = true;
+  BridgeJsonBuffer buffer = { 0 };
+
+  if (!obj || obj->supertype != DWG_SUPERTYPE_OBJECT || !obj->name)
+    return NULL;
+
+  name = obj->name;
+
+  if (!bridge_json_buffer_append_char (&buffer, '['))
+    goto failed;
+
+#define APPEND_ACTION_CONNECTIONS(TYPE, COUNT)                                \
+  do                                                                          \
+    {                                                                         \
+      const Dwg_Object_##TYPE *typed                                          \
+          = (const Dwg_Object_##TYPE *)bridge_dwg_object_specific_ptr (obj);  \
+      if (!typed                                                              \
+          || !bridge_json_append_action_connections (&buffer, obj,             \
+                                                     typed->conn_pts, COUNT,  \
+                                                     &first))                 \
+        goto failed;                                                          \
+    }                                                                         \
+  while (0)
+
+#define APPEND_1PT_PARAMETER_CONNECTIONS(TYPE)                                \
+  do                                                                          \
+    {                                                                         \
+      const Dwg_Object_##TYPE *typed                                          \
+          = (const Dwg_Object_##TYPE *)bridge_dwg_object_specific_ptr (obj);  \
+      if (!typed                                                              \
+          || !bridge_json_append_parameter_connections (&buffer, obj, "prop1",\
+                                                       &typed->prop1, &first) \
+          || !bridge_json_append_parameter_connections (&buffer, obj, "prop2",\
+                                                       &typed->prop2, &first))\
+        goto failed;                                                          \
+    }                                                                         \
+  while (0)
+
+#define APPEND_2PT_PARAMETER_CONNECTIONS(TYPE)                                \
+  do                                                                          \
+    {                                                                         \
+      const Dwg_Object_##TYPE *typed                                          \
+          = (const Dwg_Object_##TYPE *)bridge_dwg_object_specific_ptr (obj);  \
+      if (!typed                                                              \
+          || !bridge_json_append_parameter_connections (&buffer, obj, "prop1",\
+                                                       &typed->prop1, &first) \
+          || !bridge_json_append_parameter_connections (&buffer, obj, "prop2",\
+                                                       &typed->prop2, &first) \
+          || !bridge_json_append_parameter_connections (&buffer, obj, "prop3",\
+                                                       &typed->prop3, &first) \
+          || !bridge_json_append_parameter_connections (&buffer, obj, "prop4",\
+                                                       &typed->prop4, &first))\
+        goto failed;                                                          \
+    }                                                                         \
+  while (0)
+
+  if (strcmp (name, "BLOCKARRAYACTION") == 0)
+    APPEND_ACTION_CONNECTIONS (BLOCKARRAYACTION, 4);
+  else if (strcmp (name, "BLOCKFLIPACTION") == 0)
+    APPEND_ACTION_CONNECTIONS (BLOCKFLIPACTION, 4);
+  else if (strcmp (name, "BLOCKMOVEACTION") == 0)
+    APPEND_ACTION_CONNECTIONS (BLOCKMOVEACTION, 2);
+  else if (strcmp (name, "BLOCKPOLARSTRETCHACTION") == 0)
+    APPEND_ACTION_CONNECTIONS (BLOCKPOLARSTRETCHACTION, 6);
+  else if (strcmp (name, "BLOCKROTATEACTION") == 0)
+    APPEND_ACTION_CONNECTIONS (BLOCKROTATEACTION, 3);
+  else if (strcmp (name, "BLOCKSCALEACTION") == 0)
+    APPEND_ACTION_CONNECTIONS (BLOCKSCALEACTION, 5);
+  else if (strcmp (name, "BLOCKSTRETCHACTION") == 0)
+    APPEND_ACTION_CONNECTIONS (BLOCKSTRETCHACTION, 2);
+  else if (strcmp (name, "BLOCKBASEPOINTPARAMETER") == 0)
+    APPEND_1PT_PARAMETER_CONNECTIONS (BLOCKBASEPOINTPARAMETER);
+  else if (strcmp (name, "BLOCKLOOKUPPARAMETER") == 0)
+    APPEND_1PT_PARAMETER_CONNECTIONS (BLOCKLOOKUPPARAMETER);
+  else if (strcmp (name, "BLOCKPOINTPARAMETER") == 0)
+    APPEND_1PT_PARAMETER_CONNECTIONS (BLOCKPOINTPARAMETER);
+  else if (strcmp (name, "BLOCKUSERPARAMETER") == 0)
+    APPEND_1PT_PARAMETER_CONNECTIONS (BLOCKUSERPARAMETER);
+  else if (strcmp (name, "BLOCKVISIBILITYPARAMETER") == 0)
+    APPEND_1PT_PARAMETER_CONNECTIONS (BLOCKVISIBILITYPARAMETER);
+  else if (strcmp (name, "BLOCKALIGNEDCONSTRAINTPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKALIGNEDCONSTRAINTPARAMETER);
+  else if (strcmp (name, "BLOCKALIGNMENTPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKALIGNMENTPARAMETER);
+  else if (strcmp (name, "BLOCKANGULARCONSTRAINTPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKANGULARCONSTRAINTPARAMETER);
+  else if (strcmp (name, "BLOCKDIAMETRICCONSTRAINTPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKDIAMETRICCONSTRAINTPARAMETER);
+  else if (strcmp (name, "BLOCKFLIPPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKFLIPPARAMETER);
+  else if (strcmp (name, "BLOCKHORIZONTALCONSTRAINTPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKHORIZONTALCONSTRAINTPARAMETER);
+  else if (strcmp (name, "BLOCKLINEARCONSTRAINTPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKLINEARCONSTRAINTPARAMETER);
+  else if (strcmp (name, "BLOCKLINEARPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKLINEARPARAMETER);
+  else if (strcmp (name, "BLOCKPOLARPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKPOLARPARAMETER);
+  else if (strcmp (name, "BLOCKRADIALCONSTRAINTPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKRADIALCONSTRAINTPARAMETER);
+  else if (strcmp (name, "BLOCKROTATIONPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKROTATIONPARAMETER);
+  else if (strcmp (name, "BLOCKVERTICALCONSTRAINTPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKVERTICALCONSTRAINTPARAMETER);
+  else if (strcmp (name, "BLOCKXYPARAMETER") == 0)
+    APPEND_2PT_PARAMETER_CONNECTIONS (BLOCKXYPARAMETER);
+  else
+    matched = false;
+
+#undef APPEND_ACTION_CONNECTIONS
+#undef APPEND_1PT_PARAMETER_CONNECTIONS
+#undef APPEND_2PT_PARAMETER_CONNECTIONS
+
+  if (!matched)
+    goto failed;
+
+  if (!bridge_json_buffer_append_char (&buffer, ']'))
+    goto failed;
+  return buffer.data;
+
+failed:
+  free (buffer.data);
+  return NULL;
+}
+
 char *
 bridge_dwg_object_evaluation_graph_nodes_json (const Dwg_Object *obj)
 {

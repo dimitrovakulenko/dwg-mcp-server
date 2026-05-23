@@ -44,6 +44,7 @@ char *bridge_dwg_object_read_field_json(const Dwg_Object *obj,
 char *bridge_dwg_object_dictionary_items_json (const Dwg_Object *obj);
 char *bridge_dwg_object_dictionary_item_handles_json (const Dwg_Object *obj);
 char *bridge_dwg_object_xrecord_xdata_json (const Dwg_Object *obj);
+char *bridge_dwg_object_block_connections_json (const Dwg_Object *obj);
 char *bridge_dwg_object_evaluation_graph_nodes_json (const Dwg_Object *obj);
 char *bridge_dwg_object_evaluation_graph_edges_json (const Dwg_Object *obj);
 char *bridge_dwg_object_hatch_contours_json (const Dwg_Object *obj);
