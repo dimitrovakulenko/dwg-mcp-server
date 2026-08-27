@@ -36,8 +36,7 @@ fn table_fixture_path() -> PathBuf {
 }
 
 fn dxf_fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../third_party/libredwg/test/test-data/sample_2018.dxf")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testData/render-smoke.dxf")
 }
 
 fn contains_2d_point(value: &serde_json::Value) -> bool {
