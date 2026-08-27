@@ -164,6 +164,7 @@ version = "0.1.0"
 dependencies = [
  "dwg-libredwg",
  "dwg-worker-core",
+ "serde_json",
 ]
 
 [[package]]
