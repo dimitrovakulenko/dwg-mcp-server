@@ -20,10 +20,17 @@ SERVER_INSTRUCTIONS = (
     "Use dwg.list_roots to discover roots available for DWG access. "
     "Open a DWG with dwg.open_file before using file-scoped tools. "
     "Use dwg.list_file_types to discover valid type names for that file. "
+    "Use dwg.describe_type to discover properties marked writable before editing. "
     "open_file accepts only rootUri plus a path relative to that root."
 )
 
 READ_ONLY_TOOL = ToolAnnotations(readOnlyHint=True)
+MUTATING_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 
 
 def _split_semicolon_paths(raw_paths: str) -> list[Path]:
@@ -397,6 +404,48 @@ class DwgMcpApplication:
                 annotations=READ_ONLY_TOOL,
             ),
             Tool(
+                name="dwg.set_entity_properties",
+                description=(
+                    "Set properties marked writable by dwg.describe_type on one existing entity. "
+                    "The change affects only the opened in-memory document and is discarded on "
+                    "close; this tool does not write the source file."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "documentId": {
+                            "type": "string",
+                            "description": "documentId returned by dwg.open_file.",
+                        },
+                        "handle": {
+                            "type": "string",
+                            "description": "Handle of the entity to update.",
+                        },
+                        "properties": {
+                            "type": "object",
+                            "minProperties": 1,
+                            "description": (
+                                "Property names and values accepted for the entity's type. "
+                                "Discover writable properties with dwg.describe_type."
+                            ),
+                            "additionalProperties": True,
+                        },
+                        "projection": {
+                            "type": "string",
+                            "enum": ["summary", "full"],
+                        },
+                        "select": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional properties to return after the update.",
+                        },
+                    },
+                    "required": ["documentId", "handle", "properties"],
+                    "additionalProperties": False,
+                },
+                annotations=MUTATING_TOOL,
+            ),
+            Tool(
                 name="dwg.list_render_views",
                 description="List model space, paper-space layouts, and layout viewports that can be rendered.",
                 inputSchema={
@@ -484,6 +533,10 @@ class DwgMcpApplication:
             )
         if name == "dwg.query_objects":
             return await self.session_manager.query_objects(arguments["documentId"], arguments)
+        if name == "dwg.set_entity_properties":
+            return await self.session_manager.set_entity_properties(
+                arguments["documentId"], arguments
+            )
         if name == "dwg.list_render_views":
             return await self.session_manager.list_render_views(arguments["documentId"])
         if name == "dwg.render_view":

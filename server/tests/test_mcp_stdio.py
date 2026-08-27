@@ -50,6 +50,7 @@ class McpStdioTests(unittest.TestCase):
         self.assertIn("dwg.describe_type", tool_names)
         self.assertIn("dwg.get_objects", tool_names)
         self.assertIn("dwg.query_objects", tool_names)
+        self.assertIn("dwg.set_entity_properties", tool_names)
         self.assertIn("dwg.list_render_views", tool_names)
         self.assertIn("dwg.render_view", tool_names)
 

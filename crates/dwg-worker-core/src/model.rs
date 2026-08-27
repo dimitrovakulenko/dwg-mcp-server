@@ -12,6 +12,8 @@ pub struct PropertyDefinition {
     pub description: Option<String>,
     #[serde(default)]
     pub queryable: bool,
+    #[serde(default)]
+    pub writable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_target: Option<String>,
 }
@@ -304,6 +306,24 @@ pub struct GetObjectsResult {
     pub items: Vec<ObjectRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing_handles: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetEntityPropertiesRequest {
+    pub handle: String,
+    pub properties: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub projection: Projection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetEntityPropertiesResult {
+    pub item: ObjectRecord,
+    pub dirty: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

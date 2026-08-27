@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -7,8 +8,8 @@ use dwg_libredwg::{LibreDwgFactory, describe_supported_type, list_supported_type
 use dwg_worker_core::{
     BackendFactory, Bounds, DwgDocument, FilterOperator, GetObjectsRequest, Projection,
     PropertyFilter, QueryMode, QueryObjectsRequest, QueryScope, QuerySpace, RelationDirection,
-    RelationFilter, RenderBackground, RenderFormat, RenderRequest, RenderTarget, SortDirection,
-    SortSpec, StdioHandler,
+    RelationFilter, RenderBackground, RenderFormat, RenderRequest, RenderTarget,
+    SetEntityPropertiesRequest, SortDirection, SortSpec, StdioHandler, WorkerError,
 };
 use serde_json::json;
 
@@ -50,6 +51,135 @@ fn contains_2d_point(value: &serde_json::Value) -> bool {
         serde_json::Value::Object(items) => items.values().any(contains_2d_point),
         _ => false,
     }
+}
+
+#[test]
+fn block_reference_catalog_marks_only_supported_properties_writable() {
+    let block_reference = describe_supported_type("AcDbBlockReference")
+        .expect("block reference type should be described");
+    let writable = block_reference
+        .properties
+        .iter()
+        .filter(|property| property.writable)
+        .map(|property| property.name.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(writable, vec!["ins_pt", "scale", "rotation"]);
+    assert!(
+        block_reference
+            .properties
+            .iter()
+            .find(|property| property.name == "rotation")
+            .and_then(|property| property.description.as_deref())
+            .is_some_and(|description| description.contains("radians"))
+    );
+    assert!(
+        block_reference
+            .properties
+            .iter()
+            .find(|property| property.name == "ins_pt")
+            .and_then(|property| property.description.as_deref())
+            .is_some_and(|description| description.contains("OCS"))
+    );
+}
+
+#[test]
+fn block_reference_properties_can_be_changed_in_memory() {
+    let _guard = lock_libredwg();
+    let mut document = LibreDwgFactory
+        .open(&fixture_path())
+        .expect("fixture should open");
+
+    let updated = document
+        .set_entity_properties(SetEntityPropertiesRequest {
+            handle: "2AD".to_owned(),
+            properties: BTreeMap::from([
+                ("ins_pt".to_owned(), json!([101.0, 202.0, 3.0])),
+                ("rotation".to_owned(), json!(1.25)),
+                ("scale".to_owned(), json!([-2.0, -2.0, -2.0])),
+            ]),
+            projection: Projection::Full,
+            select: Some(vec![
+                "ins_pt".to_owned(),
+                "rotation".to_owned(),
+                "scale".to_owned(),
+                "scale_flag".to_owned(),
+            ]),
+        })
+        .expect("block reference transform should update");
+
+    assert!(updated.dirty);
+    assert_eq!(
+        updated.item.properties["ins_pt"],
+        json!([101.0, 202.0, 3.0])
+    );
+    assert_eq!(updated.item.properties["rotation"], json!(1.25));
+    assert_eq!(updated.item.properties["scale"], json!([-2.0, -2.0, -2.0]));
+    assert_eq!(updated.item.properties["scale_flag"], json!(2));
+
+    let error = document
+        .set_entity_properties(SetEntityPropertiesRequest {
+            handle: "2AD".to_owned(),
+            properties: BTreeMap::from([("block_header".to_owned(), json!("CA"))]),
+            projection: Projection::Summary,
+            select: None,
+        })
+        .expect_err("block definition handle must remain read-only");
+    assert!(matches!(error, WorkerError::PropertyNotWritable(_)));
+
+    let error = document
+        .set_entity_properties(SetEntityPropertiesRequest {
+            handle: "2AD".to_owned(),
+            properties: BTreeMap::from([
+                ("ins_pt".to_owned(), json!([9.0, 9.0, 9.0])),
+                ("scale".to_owned(), json!([1.0, 0.0, 1.0])),
+            ]),
+            projection: Projection::Summary,
+            select: None,
+        })
+        .expect_err("all property values must validate before mutation");
+    assert!(matches!(error, WorkerError::InvalidPropertyValue(_)));
+    let unchanged = document
+        .get_objects(GetObjectsRequest {
+            handles: vec!["2AD".to_owned()],
+            projection: Projection::Full,
+            select: Some(vec!["ins_pt".to_owned()]),
+        })
+        .expect("updated entity should remain readable");
+    assert_eq!(
+        unchanged.items[0].properties["ins_pt"],
+        json!([101.0, 202.0, 3.0])
+    );
+}
+
+#[test]
+fn unsafe_block_reference_transforms_are_rejected_before_mutation() {
+    let _guard = lock_libredwg();
+    let mut document = LibreDwgFactory
+        .open(&dyn_blocks_fixture_path())
+        .expect("dynamic-block fixture should open");
+
+    let error = document
+        .set_entity_properties(SetEntityPropertiesRequest {
+            handle: "298".to_owned(),
+            properties: BTreeMap::from([("scale".to_owned(), json!([1.0, 2.0, 1.0]))]),
+            projection: Projection::Summary,
+            select: None,
+        })
+        .expect_err("uniform-only block must reject non-uniform scale");
+    assert!(matches!(error, WorkerError::InvalidPropertyValue(_)));
+
+    let error = document
+        .set_entity_properties(SetEntityPropertiesRequest {
+            handle: "298".to_owned(),
+            properties: BTreeMap::from([("rotation".to_owned(), json!(1.25))]),
+            projection: Projection::Summary,
+            select: None,
+        })
+        .expect_err("attributed block reference must reject transforms");
+    assert!(
+        matches!(error, WorkerError::MutationFailed(message) if message.contains("attributes"))
+    );
 }
 
 #[test]

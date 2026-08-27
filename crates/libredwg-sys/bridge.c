@@ -106,6 +106,80 @@ bridge_dwg_object_at(const Dwg_Data *dwg, BITCODE_BL index)
   return &dwg->object[index];
 }
 
+BridgeDwgInsertSetTransformStatus
+bridge_dwg_insert_set_transform(Dwg_Data *dwg, BITCODE_RLL handle_value,
+                                bool set_ins_pt, double ins_x, double ins_y,
+                                double ins_z, bool set_rotation,
+                                double rotation, bool set_scale,
+                                double scale_x, double scale_y,
+                                double scale_z)
+{
+  Dwg_Entity_INSERT *insert = NULL;
+  Dwg_Object *block_obj;
+  Dwg_Object_BLOCK_HEADER *block;
+
+  if (!dwg || !handle_value
+      || (set_ins_pt
+          && (!isfinite (ins_x) || !isfinite (ins_y) || !isfinite (ins_z)))
+      || (set_rotation && !isfinite (rotation))
+      || (set_scale
+          && (!isfinite (scale_x) || !isfinite (scale_y)
+              || !isfinite (scale_z) || scale_x == 0.0 || scale_y == 0.0
+              || scale_z == 0.0)))
+    return BRIDGE_DWG_INSERT_SET_TRANSFORM_FAILED;
+
+  for (BITCODE_BL index = 0; index < dwg->num_objects; index++)
+    {
+      Dwg_Object *obj = &dwg->object[index];
+      if (obj->handle.value == handle_value && obj->fixedtype == DWG_TYPE_INSERT
+          && obj->tio.entity)
+        {
+          insert = obj->tio.entity->tio.INSERT;
+          break;
+        }
+    }
+  if (!insert)
+    return BRIDGE_DWG_INSERT_SET_TRANSFORM_FAILED;
+
+  if (set_scale)
+    {
+      block_obj = dwg_ref_object (dwg, insert->block_header);
+      if (!block_obj || block_obj->fixedtype != DWG_TYPE_BLOCK_HEADER
+          || !block_obj->tio.object
+          || !(block = block_obj->tio.object->tio.BLOCK_HEADER))
+        return BRIDGE_DWG_INSERT_SET_TRANSFORM_MISSING_BLOCK;
+      if (block->block_scaling == 1
+          && (scale_x != scale_y || scale_x != scale_z))
+        return BRIDGE_DWG_INSERT_SET_TRANSFORM_NON_UNIFORM_SCALE;
+    }
+
+  if (insert->has_attribs || insert->num_owned || insert->first_attrib
+      || insert->last_attrib || insert->attribs)
+    return BRIDGE_DWG_INSERT_SET_TRANSFORM_HAS_ATTRIBUTES;
+
+  if (set_ins_pt)
+    {
+      insert->ins_pt.x = ins_x;
+      insert->ins_pt.y = ins_y;
+      insert->ins_pt.z = ins_z;
+    }
+  if (set_rotation)
+    insert->rotation = rotation;
+  if (set_scale)
+    {
+      insert->scale.x = scale_x;
+      insert->scale.y = scale_y;
+      insert->scale.z = scale_z;
+      insert->scale_flag
+          = scale_x == 1.0 && scale_y == 1.0 && scale_z == 1.0
+                ? 3
+                : scale_x == scale_y && scale_x == scale_z
+                      ? 2
+                      : scale_x == 1.0 ? 1 : 0;
+    }
+  return BRIDGE_DWG_INSERT_SET_TRANSFORM_OK;
+}
+
 const char *
 bridge_dwg_object_name(const Dwg_Object *obj)
 {
@@ -722,7 +796,7 @@ bridge_dwg_header_read_field(const Dwg_Data *dwg, const char *fieldname,
       return true;
     }
 
-  if (bridge_type_matches (fp.type, "B") || bridge_type_matches (fp.type, "BB"))
+  if (bridge_type_matches (fp.type, "B"))
     {
       BITCODE_B value = 0;
       if (fp.size != sizeof (value))
@@ -731,6 +805,18 @@ bridge_dwg_header_read_field(const Dwg_Data *dwg, const char *fieldname,
         return false;
       out->kind = BRIDGE_DWG_FIELD_BOOL;
       out->integer_value = value != 0;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "BB"))
+    {
+      BITCODE_BB value = 0;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &value, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_INTEGER;
+      out->integer_value = value;
       return true;
     }
 
@@ -918,7 +1004,7 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
       return true;
     }
 
-  if (bridge_type_matches(fp.type, "B") || bridge_type_matches(fp.type, "BB"))
+  if (bridge_type_matches(fp.type, "B"))
     {
       BITCODE_B value = 0;
       if (fp.size != sizeof(value))
@@ -927,6 +1013,18 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
         return false;
       out->kind = BRIDGE_DWG_FIELD_BOOL;
       out->integer_value = value != 0;
+      return true;
+    }
+
+  if (bridge_type_matches(fp.type, "BB"))
+    {
+      BITCODE_BB value = 0;
+      if (fp.size != sizeof(value))
+        return false;
+      if (!bridge_read_raw_field(obj, fieldname, is_common, &value, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_INTEGER;
+      out->integer_value = value;
       return true;
     }
 

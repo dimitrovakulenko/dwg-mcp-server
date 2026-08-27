@@ -10,6 +10,7 @@ use crate::protocol::{
     CloseFileResult, DescribeTypeParams, GetObjectsParams, HealthResult, ListFileTypesResult,
     ListRenderViewsResult, ListTypesParams, ListTypesResult, OpenFileParams, OpenFileResult,
     QueryObjectsParams, RenderViewParams, RequestEnvelope, ResponseEnvelope, ResponseError,
+    SetEntityPropertiesParams,
 };
 
 pub struct StdioHandler<F: BackendFactory> {
@@ -69,6 +70,7 @@ impl<F: BackendFactory> StdioHandler<F> {
             "describeType" => self.handle_describe_type(request.id, request.params),
             "getObjects" => self.handle_get_objects(request.id, request.params),
             "queryObjects" => self.handle_query_objects(request.id, request.params),
+            "setEntityProperties" => self.handle_set_entity_properties(request.id, request.params),
             "listRenderViews" => self.handle_list_render_views(request.id),
             "renderView" => self.handle_render_view(request.id, request.params),
             _ => self.error_response(
@@ -198,6 +200,23 @@ impl<F: BackendFactory> StdioHandler<F> {
         }
     }
 
+    fn handle_set_entity_properties(&mut self, id: u64, params: Value) -> ResponseEnvelope {
+        let params: SetEntityPropertiesParams = match serde_json::from_value(params) {
+            Ok(params) => params,
+            Err(error) => {
+                return self.error_response(id, WorkerError::InvalidRequest(error.to_string()));
+            }
+        };
+
+        let result = self
+            .require_document_mut()
+            .and_then(|document| document.set_entity_properties(params));
+        match result {
+            Ok(result) => self.to_response(id, &result),
+            Err(error) => self.error_response(id, error),
+        }
+    }
+
     fn handle_list_render_views(&mut self, id: u64) -> ResponseEnvelope {
         match self
             .require_document()
@@ -226,6 +245,10 @@ impl<F: BackendFactory> StdioHandler<F> {
 
     fn require_document(&self) -> Result<&F::Document, WorkerError> {
         self.document.as_ref().ok_or(WorkerError::DocumentNotOpen)
+    }
+
+    fn require_document_mut(&mut self) -> Result<&mut F::Document, WorkerError> {
+        self.document.as_mut().ok_or(WorkerError::DocumentNotOpen)
     }
 
     fn paginate_types(
@@ -289,6 +312,11 @@ impl<F: BackendFactory> StdioHandler<F> {
             WorkerError::InvalidRequest(_) => "invalid_request",
             WorkerError::InvalidCursor(_) => "invalid_cursor",
             WorkerError::UnknownType(_) => "unknown_type",
+            WorkerError::EntityNotFound(_) => "entity_not_found",
+            WorkerError::PropertyNotFound(_) => "property_not_found",
+            WorkerError::PropertyNotWritable(_) => "property_not_writable",
+            WorkerError::InvalidPropertyValue(_) => "invalid_property_value",
+            WorkerError::MutationFailed(_) => "mutation_failed",
             WorkerError::Unsupported(_) => "unsupported",
             WorkerError::BackendUnavailable(_) => "backend_unavailable",
             WorkerError::OpenFailed(_) => "open_failed",

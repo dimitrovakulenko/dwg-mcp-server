@@ -314,6 +314,15 @@ class SessionManager:
             **(result.result or {}),
         }
 
+    async def set_entity_properties(
+        self, document_id: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        worker = await self._require_session(document_id)
+        params = dict(request)
+        params.pop("documentId", None)
+        result = await worker.call("setEntityProperties", params)
+        return {"documentId": document_id, **(result.result or {})}
+
     async def list_render_views(self, document_id: str) -> dict[str, Any]:
         worker = await self._require_session(document_id)
         result = await worker.call("listRenderViews", {})

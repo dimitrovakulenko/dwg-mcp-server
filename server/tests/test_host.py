@@ -103,6 +103,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 "dwg.describe_type",
                 "dwg.get_objects",
                 "dwg.query_objects",
+                "dwg.set_entity_properties",
                 "dwg.list_render_views",
                 "dwg.render_view",
             ],
@@ -115,6 +116,16 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(described["typeName"], "AcDb3PointAngularDimension")
         property_names = {item["name"] for item in described["properties"]}
         self.assertIn("center_pt", property_names)
+
+        block_reference_type = await self.app.call_tool(
+            "dwg.describe_type", {"typeName": "AcDbBlockReference"}
+        )
+        writable = {
+            item["name"]
+            for item in block_reference_type["properties"]
+            if item["writable"]
+        }
+        self.assertEqual(writable, {"ins_pt", "rotation", "scale"})
 
         roots = await self.app.call_tool("dwg.list_roots", {})
         self.assertEqual(roots["roots"][0]["uri"], test_data_root_uri())
@@ -164,6 +175,25 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fetched["items"][0]["handle"], layer_handle)
         self.assertEqual(fetched["items"][0]["properties"]["name"], "0")
         self.assertEqual(fetched["missingHandles"], ["missing-handle"])
+
+        updated = await self.app.call_tool(
+            "dwg.set_entity_properties",
+            {
+                "documentId": opened["documentId"],
+                "handle": "2AD",
+                "properties": {
+                    "ins_pt": [101.0, 202.0, 3.0],
+                    "rotation": 1.25,
+                    "scale": [-2.0, 3.0, 4.0],
+                },
+                "projection": "full",
+                "select": ["ins_pt", "rotation", "scale"],
+            },
+        )
+        self.assertTrue(updated["dirty"])
+        self.assertEqual(updated["item"]["properties"]["ins_pt"], [101.0, 202.0, 3.0])
+        self.assertEqual(updated["item"]["properties"]["rotation"], 1.25)
+        self.assertEqual(updated["item"]["properties"]["scale"], [-2.0, 3.0, 4.0])
 
         queried = await self.app.call_tool(
             "dwg.query_objects",

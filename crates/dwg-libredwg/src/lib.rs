@@ -9,7 +9,8 @@ use std::sync::OnceLock;
 use dwg_render_core::{RenderDocument, RenderOutput, RenderRequest, RenderView, SourceEntity};
 use dwg_worker_core::{
     BackendFactory, DwgDocument, GetObjectsRequest, GetObjectsResult, IndexedDocument,
-    IndexedObject, QueryObjectsRequest, QueryObjectsResult, TypeDefinition, WorkerError,
+    IndexedObject, QueryObjectsRequest, QueryObjectsResult, SetEntityPropertiesRequest,
+    SetEntityPropertiesResult, TypeDefinition, WorkerError,
 };
 use serde_json::{Value, json};
 
@@ -92,6 +93,24 @@ impl DwgDocument for LibreDwgDocument {
         self.indexed.query_objects(request)
     }
 
+    fn set_entity_properties(
+        &mut self,
+        request: SetEntityPropertiesRequest,
+    ) -> Result<SetEntityPropertiesResult, WorkerError> {
+        #[cfg(feature = "native")]
+        {
+            self.set_native_entity_properties(request)
+        }
+
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = request;
+            Err(WorkerError::BackendUnavailable(
+                "dwg-libredwg was built without native LibreDWG support".to_owned(),
+            ))
+        }
+    }
+
     fn list_render_views(&self) -> Result<Vec<RenderView>, WorkerError> {
         self.render_document()
             .list_views()
@@ -131,6 +150,157 @@ impl LibreDwgDocument {
             )
         })
     }
+
+    #[cfg(feature = "native")]
+    fn set_native_entity_properties(
+        &mut self,
+        request: SetEntityPropertiesRequest,
+    ) -> Result<SetEntityPropertiesResult, WorkerError> {
+        let SetEntityPropertiesRequest {
+            handle,
+            properties,
+            projection,
+            select,
+        } = request;
+        if properties.is_empty() {
+            return Err(WorkerError::InvalidRequest(
+                "properties must not be empty".to_owned(),
+            ));
+        }
+
+        let current = self
+            .indexed
+            .get_objects(GetObjectsRequest {
+                handles: vec![handle.clone()],
+                projection: dwg_worker_core::Projection::Full,
+                select: None,
+            })?
+            .items
+            .into_iter()
+            .next()
+            .ok_or_else(|| WorkerError::EntityNotFound(handle.clone()))?;
+        let type_definition = self.indexed.describe_type(&current.type_name)?;
+        let mut ins_pt = None;
+        let mut rotation = None;
+        let mut scale = None;
+
+        for (name, value) in &properties {
+            let definition = type_definition
+                .properties
+                .iter()
+                .find(|definition| definition.name == *name)
+                .ok_or_else(|| {
+                    WorkerError::PropertyNotFound(format!("{} on {}", name, current.type_name))
+                })?;
+            if !definition.writable {
+                return Err(WorkerError::PropertyNotWritable(format!(
+                    "{} on {}",
+                    name, current.type_name
+                )));
+            }
+
+            match name.as_str() {
+                "ins_pt" => ins_pt = Some(point3_value(name, value, false)?),
+                "rotation" => rotation = Some(number_value(name, value)?),
+                "scale" => scale = Some(point3_value(name, value, true)?),
+                _ => {
+                    return Err(WorkerError::PropertyNotWritable(format!(
+                        "{} on {}",
+                        name, current.type_name
+                    )));
+                }
+            }
+        }
+
+        let handle_value = u64::from_str_radix(&handle, 16)
+            .map_err(|_| WorkerError::InvalidRequest(format!("invalid handle: {handle}")))?;
+        let ins = ins_pt.unwrap_or([0.0; 3]);
+        let scale_value = scale.unwrap_or([0.0; 3]);
+        let status = unsafe {
+            libredwg_sys::bridge_dwg_insert_set_transform(
+                self._native.raw,
+                handle_value,
+                ins_pt.is_some(),
+                ins[0],
+                ins[1],
+                ins[2],
+                rotation.is_some(),
+                rotation.unwrap_or(0.0),
+                scale.is_some(),
+                scale_value[0],
+                scale_value[1],
+                scale_value[2],
+            )
+        };
+        match status {
+            libredwg_sys::BridgeDwgInsertSetTransformStatus_BRIDGE_DWG_INSERT_SET_TRANSFORM_OK => {}
+            libredwg_sys::BridgeDwgInsertSetTransformStatus_BRIDGE_DWG_INSERT_SET_TRANSFORM_HAS_ATTRIBUTES => {
+                return Err(WorkerError::MutationFailed(format!(
+                    "cannot update {handle}: block references with attributes are not supported"
+                )));
+            }
+            libredwg_sys::BridgeDwgInsertSetTransformStatus_BRIDGE_DWG_INSERT_SET_TRANSFORM_NON_UNIFORM_SCALE => {
+                return Err(WorkerError::InvalidPropertyValue(
+                    "scale must be uniform for this block definition".to_owned(),
+                ));
+            }
+            libredwg_sys::BridgeDwgInsertSetTransformStatus_BRIDGE_DWG_INSERT_SET_TRANSFORM_MISSING_BLOCK => {
+                return Err(WorkerError::MutationFailed(format!(
+                    "cannot update {handle}: block definition is unavailable"
+                )));
+            }
+            _ => {
+                return Err(WorkerError::MutationFailed(format!(
+                    "failed to update {handle}"
+                )));
+            }
+        }
+
+        self.indexed = build_indexed_document(&self._native)?;
+        self.render.take();
+        let item = self
+            .indexed
+            .get_objects(GetObjectsRequest {
+                handles: vec![handle.clone()],
+                projection,
+                select,
+            })?
+            .items
+            .into_iter()
+            .next()
+            .ok_or_else(|| WorkerError::EntityNotFound(handle))?;
+
+        Ok(SetEntityPropertiesResult { item, dirty: true })
+    }
+}
+
+fn number_value(name: &str, value: &Value) -> Result<f64, WorkerError> {
+    value
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| WorkerError::InvalidPropertyValue(format!("{name} must be a finite number")))
+}
+
+fn point3_value(name: &str, value: &Value, reject_zero: bool) -> Result<[f64; 3], WorkerError> {
+    let values = value
+        .as_array()
+        .filter(|values| values.len() == 3)
+        .ok_or_else(|| {
+            WorkerError::InvalidPropertyValue(format!(
+                "{name} must be an array of three finite numbers"
+            ))
+        })?;
+    let point = [
+        number_value(name, &values[0])?,
+        number_value(name, &values[1])?,
+        number_value(name, &values[2])?,
+    ];
+    if reject_zero && point.contains(&0.0) {
+        return Err(WorkerError::InvalidPropertyValue(
+            "scale components must be non-zero".to_owned(),
+        ));
+    }
+    Ok(point)
 }
 
 #[cfg(feature = "native")]

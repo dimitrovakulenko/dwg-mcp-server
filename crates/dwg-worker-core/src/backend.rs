@@ -9,7 +9,8 @@ use thiserror::Error;
 use crate::model::{
     FilterOperator, GetObjectsRequest, GetObjectsResult, IndexedObject, Projection, PropertyFilter,
     QueryMode, QueryObjectsRequest, QueryObjectsResult, QueryScope, QuerySpace, RelationDirection,
-    RelationFilter, SortDirection, SortSpec, TypeDefinition,
+    RelationFilter, SetEntityPropertiesRequest, SetEntityPropertiesResult, SortDirection, SortSpec,
+    TypeDefinition,
 };
 
 #[derive(Debug, Error)]
@@ -22,6 +23,16 @@ pub enum WorkerError {
     InvalidCursor(String),
     #[error("unknown type: {0}")]
     UnknownType(String),
+    #[error("entity not found: {0}")]
+    EntityNotFound(String),
+    #[error("property not found: {0}")]
+    PropertyNotFound(String),
+    #[error("property is not writable: {0}")]
+    PropertyNotWritable(String),
+    #[error("invalid property value: {0}")]
+    InvalidPropertyValue(String),
+    #[error("entity mutation failed: {0}")]
+    MutationFailed(String),
     #[error("unsupported: {0}")]
     Unsupported(String),
     #[error("backend unavailable: {0}")]
@@ -40,6 +51,14 @@ pub trait DwgDocument {
         &self,
         request: QueryObjectsRequest,
     ) -> Result<QueryObjectsResult, WorkerError>;
+    fn set_entity_properties(
+        &mut self,
+        _request: SetEntityPropertiesRequest,
+    ) -> Result<SetEntityPropertiesResult, WorkerError> {
+        Err(WorkerError::Unsupported(
+            "entity mutation is not available for this backend".to_owned(),
+        ))
+    }
     fn list_render_views(&self) -> Result<Vec<RenderView>, WorkerError> {
         Err(WorkerError::Unsupported(
             "rendering is not available for this backend".to_owned(),

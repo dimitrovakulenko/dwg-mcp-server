@@ -82,7 +82,11 @@ impl SchemaCatalog {
                 },
                 &specific_properties,
             );
-            let properties = extend_custom_properties(source_name, &canonical_name, properties);
+            let properties = writable_properties(
+                source_name,
+                &canonical_name,
+                extend_custom_properties(source_name, &canonical_name, properties),
+            );
 
             let schema_type = SchemaType {
                 source_name: source_name.clone(),
@@ -94,7 +98,9 @@ impl SchemaCatalog {
             lookup_to_source.insert(source_name.clone(), source_name.clone());
             lookup_to_source.insert(canonical_name, source_name.clone());
             for alias in aliases {
-                lookup_to_source.insert(alias, source_name.clone());
+                lookup_to_source
+                    .entry(alias)
+                    .or_insert_with(|| source_name.clone());
             }
 
             types_by_source.insert(source_name.clone(), schema_type);
@@ -224,6 +230,7 @@ fn inferred_type_definition(type_name: &str, observed_property_names: &[String])
                 value_kind: "unknown".to_owned(),
                 description: None,
                 queryable: true,
+                writable: false,
                 reference_target: None,
             })
             .collect(),
@@ -429,6 +436,7 @@ fn build_property_definition(
         value_kind: classify_field_kind(raw_kind),
         description: None,
         queryable: is_queryable_field(field_name, raw_kind, is_header),
+        writable: false,
         reference_target: raw_kind.contains('H').then(|| "handle".to_owned()),
     })
 }
@@ -504,7 +512,7 @@ fn classify_field_kind(raw_kind: &str) -> String {
         "point".to_owned()
     } else if raw_kind.contains('*') {
         "array".to_owned()
-    } else if matches!(raw_kind, "B" | "BB") {
+    } else if raw_kind == "B" {
         "boolean".to_owned()
     } else {
         "number".to_owned()
@@ -556,6 +564,7 @@ fn merge_properties(
                 value_kind: "unknown".to_owned(),
                 description: None,
                 queryable: true,
+                writable: false,
                 reference_target: None,
             });
         }
@@ -615,6 +624,7 @@ fn extend_custom_properties(
                 "Dictionary entry name to referenced object handle mapping.".to_owned(),
             ),
             queryable: false,
+            writable: false,
             reference_target: None,
         });
         push_if_missing(PropertyDefinition {
@@ -624,6 +634,7 @@ fn extend_custom_properties(
                 "Ordered list of referenced object handles from this dictionary.".to_owned(),
             ),
             queryable: true,
+            writable: false,
             reference_target: Some("handle".to_owned()),
         });
     }
@@ -634,6 +645,7 @@ fn extend_custom_properties(
             value_kind: "array".to_owned(),
             description: Some("Raw xrecord payload as [groupCode, value] tuples.".to_owned()),
             queryable: false,
+            writable: false,
             reference_target: None,
         });
     }
@@ -649,6 +661,7 @@ fn extend_custom_properties(
                 "Ordered vertex coordinates resolved from the polyline vertex chain.".to_owned(),
             ),
             queryable: false,
+            writable: false,
             reference_target: None,
         });
         push_if_missing(PropertyDefinition {
@@ -658,6 +671,7 @@ fn extend_custom_properties(
                 "Ordered handles of vertex entities in the polyline chain.".to_owned(),
             ),
             queryable: true,
+            writable: false,
             reference_target: Some("handle".to_owned()),
         });
     }
@@ -671,6 +685,7 @@ fn extend_custom_properties(
                     .to_owned(),
             ),
             queryable: false,
+            writable: false,
             reference_target: None,
         });
     }
@@ -684,8 +699,34 @@ fn extend_custom_properties(
                     .to_owned(),
             ),
             queryable: false,
+            writable: false,
             reference_target: None,
         });
+    }
+
+    properties
+}
+
+fn writable_properties(
+    source_name: &str,
+    canonical_name: &str,
+    mut properties: Vec<PropertyDefinition>,
+) -> Vec<PropertyDefinition> {
+    if source_name == "INSERT" || canonical_name == "AcDbBlockReference" {
+        for property in &mut properties {
+            property.writable = matches!(property.name.as_str(), "ins_pt" | "rotation" | "scale");
+            if property.description.is_none() {
+                property.description = match property.name.as_str() {
+                    "ins_pt" => Some(
+                        "Insertion point in the entity's object coordinate system (OCS) as [x, y, z]."
+                            .to_owned(),
+                    ),
+                    "rotation" => Some("Rotation angle in radians.".to_owned()),
+                    "scale" => Some("Scale factors as [x, y, z].".to_owned()),
+                    _ => None,
+                };
+            }
+        }
     }
 
     properties

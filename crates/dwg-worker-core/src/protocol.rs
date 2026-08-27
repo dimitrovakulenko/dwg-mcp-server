@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::{GetObjectsRequest, QueryObjectsRequest, TypeDefinition};
+use crate::model::{
+    GetObjectsRequest, QueryObjectsRequest, SetEntityPropertiesRequest, TypeDefinition,
+};
 pub use dwg_render_core::{
     Bounds, RenderBackground, RenderFormat, RenderOutput, RenderRequest, RenderTarget, RenderView,
 };
@@ -103,4 +105,5 @@ pub struct ListRenderViewsResult {
 
 pub type GetObjectsParams = GetObjectsRequest;
 pub type QueryObjectsParams = QueryObjectsRequest;
+pub type SetEntityPropertiesParams = SetEntityPropertiesRequest;
 pub type RenderViewParams = RenderRequest;

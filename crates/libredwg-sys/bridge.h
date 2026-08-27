@@ -15,6 +15,14 @@ typedef enum BridgeDwgFieldKind {
   BRIDGE_DWG_FIELD_TIME = 8
 } BridgeDwgFieldKind;
 
+typedef enum BridgeDwgInsertSetTransformStatus {
+  BRIDGE_DWG_INSERT_SET_TRANSFORM_FAILED = 0,
+  BRIDGE_DWG_INSERT_SET_TRANSFORM_OK = 1,
+  BRIDGE_DWG_INSERT_SET_TRANSFORM_HAS_ATTRIBUTES = 2,
+  BRIDGE_DWG_INSERT_SET_TRANSFORM_NON_UNIFORM_SCALE = 3,
+  BRIDGE_DWG_INSERT_SET_TRANSFORM_MISSING_BLOCK = 4
+} BridgeDwgInsertSetTransformStatus;
+
 typedef struct BridgeDwgFieldValue {
   int kind;
   int owns_string;
@@ -36,6 +44,10 @@ BITCODE_BL bridge_dwg_data_num_objects(const Dwg_Data *dwg);
 void bridge_dwg_data_free(Dwg_Data *dwg);
 
 const Dwg_Object *bridge_dwg_object_at(const Dwg_Data *dwg, BITCODE_BL index);
+BridgeDwgInsertSetTransformStatus bridge_dwg_insert_set_transform(
+    Dwg_Data *dwg, BITCODE_RLL handle_value, bool set_ins_pt, double ins_x,
+    double ins_y, double ins_z, bool set_rotation, double rotation,
+    bool set_scale, double scale_x, double scale_y, double scale_z);
 const char *bridge_dwg_object_name(const Dwg_Object *obj);
 BITCODE_RLL bridge_dwg_object_handle_value(const Dwg_Object *obj);
 bool bridge_dwg_object_is_entity(const Dwg_Object *obj);
