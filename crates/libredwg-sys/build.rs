@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -29,7 +30,9 @@ fn main() {
     } else {
         println!("cargo:rustc-link-lib=redwg");
     }
-    println!("cargo:rustc-link-lib=m");
+    if env::var("CARGO_CFG_TARGET_FAMILY").as_deref() == Ok("unix") {
+        println!("cargo:rustc-link-lib=m");
+    }
 
     compile_bridge(&linkage);
     generate_bindings(&linkage);
@@ -94,7 +97,7 @@ fn compile_bridge(linkage: &Linkage) {
     let object_path = out_dir.join("bridge.o");
     let archive_path = out_dir.join("libdwg_bridge.a");
 
-    let mut compile = Command::new("cc");
+    let mut compile = Command::new(target_tool("CC", "cc"));
     compile
         .arg("-c")
         .arg(Path::new("bridge.c"))
@@ -111,7 +114,7 @@ fn compile_bridge(linkage: &Linkage) {
         panic!("failed to compile bridge.c");
     }
 
-    let status = Command::new("ar")
+    let status = Command::new(target_tool("AR", "ar"))
         .arg("crs")
         .arg(&archive_path)
         .arg(&object_path)
@@ -120,6 +123,16 @@ fn compile_bridge(linkage: &Linkage) {
     if !status.success() {
         panic!("failed to archive bridge.o");
     }
+}
+
+fn target_tool(name: &str, fallback: &str) -> OsString {
+    let target = env::var("TARGET")
+        .expect("TARGET must exist")
+        .replace('-', "_");
+    env::var_os(format!("{name}_{target}"))
+        .or_else(|| env::var_os(format!("{name}_{}", target.to_uppercase())))
+        .or_else(|| env::var_os(name))
+        .unwrap_or_else(|| fallback.into())
 }
 
 fn generate_bindings(linkage: &Linkage) {

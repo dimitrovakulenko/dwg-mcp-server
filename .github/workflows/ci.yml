@@ -11,58 +11,130 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  test:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            executable_suffix: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            executable_suffix: ""
+          - os: macos-15
+            target: aarch64-apple-darwin
+            executable_suffix: ""
+          - os: windows-2025
+            target: x86_64-pc-windows-gnu
+            executable_suffix: .exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
-          lfs: true
+          submodules: recursive
 
-      - name: Install Rust build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential clang libclang-dev libxml2-dev pkg-config
+      - name: Resolve LibreDWG revision
+        id: libredwg
+        shell: bash
+        run: echo "sha=$(git -C third_party/libredwg rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y autoconf automake bison build-essential clang flex libclang-dev libtool make pkg-config texinfo
+
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install autoconf automake bison flex libtool
+
+      - name: Install Windows build environment
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          path-type: inherit
+          install: >-
+            autoconf
+            automake
+            bison
+            flex
+            libtool
+            make
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf
+            texinfo
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Prepare prebuilt LibreDWG
-        run: bash scripts/use-libredwg-prebuilt.sh x86_64-unknown-linux-gnu "${{ github.workspace }}/.cache/libredwg-root"
+      - name: Restore LibreDWG cache
+        id: libredwg-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            third_party/libredwg/src/.libs/libredwg.a
+            third_party/libredwg/src/config.h
+          key: libredwg-v1-${{ runner.os }}-${{ matrix.target }}-${{ steps.libredwg.outputs.sha }}-${{ hashFiles('scripts/build-libredwg.sh') }}
 
-      - name: Cargo test (workspace)
+      - name: Build LibreDWG
+        if: steps.libredwg-cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
+        run: bash scripts/build-libredwg.sh
+
+      - name: Build LibreDWG on Windows
+        if: steps.libredwg-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/build-libredwg.sh
+
+      - name: Restore Cargo cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/${{ matrix.target }}
+          key: cargo-v1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Run Rust tests
+        if: runner.os != 'Windows'
         env:
-          LIBREDWG_ROOT_DIR: ${{ github.workspace }}/.cache/libredwg-root
-          LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/.cache/libredwg-root/src
-        run: cargo test --workspace
+          LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/third_party/libredwg/src
+        run: cargo test --workspace --target ${{ matrix.target }}
 
-      - name: Build dwg-worker binary for Python tests
+      - name: Run Rust tests on Windows
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
         env:
-          LIBREDWG_ROOT_DIR: ${{ github.workspace }}/.cache/libredwg-root
-          LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/.cache/libredwg-root/src
-        run: cargo build -p dwg-worker
+          AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ar
+          CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+          LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/third_party/libredwg/src
+        run: cargo test --workspace --target ${{ matrix.target }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install Python
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: server/pyproject.toml
 
-      - name: Install Python package (MCP host + deps)
-        run: python3 -m pip install --user "./server"
+      - name: Install Python server
+        run: python -m pip install ./server
 
-      - name: Python integration tests (excludes Docker-only tests)
+      - name: Run Python integration tests
+        shell: bash
         env:
-          DWG_WORKER_BIN: ${{ github.workspace }}/target/debug/dwg-worker
-          LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/.cache/libredwg-root/src
-          PYTHONPATH: ${{ github.workspace }}/server/src
-        run: |
-          python3 -m unittest \
-            server.tests.test_file_access \
-            server.tests.test_host \
-            server.tests.test_mcp_stdio \
-            -v
+          DWG_WORKER_BIN: ${{ github.workspace }}/target/${{ matrix.target }}/debug/dwg-worker${{ matrix.executable_suffix }}
+          LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/third_party/libredwg/src
+          PYTHONPATH: server/src
+        run: python -m unittest server.tests.test_file_access server.tests.test_host server.tests.test_mcp_stdio -v

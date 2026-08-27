@@ -7,5 +7,5 @@ src="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/third_party/libredwg"
 
 cd "$src"
 ./autogen.sh
-./configure --disable-docs
+./configure --disable-docs --disable-shared --enable-static --disable-bindings --disable-python
 make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
