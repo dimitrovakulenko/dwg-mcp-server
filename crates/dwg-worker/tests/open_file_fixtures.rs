@@ -19,11 +19,11 @@ fn run_open_sequence(path: &PathBuf) -> Output {
         .expect("worker process should spawn");
 
     let request_stream = format!(
-        "{{\"id\":1,\"method\":\"openFile\",\"params\":{{\"path\":\"{}\"}}}}\n\
+        "{}\n\
          {{\"id\":2,\"method\":\"listFileTypes\",\"params\":{{}}}}\n\
          {{\"id\":3,\"method\":\"queryObjects\",\"params\":{{\"typeName\":\"AcDbTable\",\"mode\":\"summary\",\"limit\":1}}}}\n\
          {{\"id\":4,\"method\":\"closeFile\",\"params\":{{}}}}\n",
-        path.display()
+        serde_json::json!({"id": 1, "method": "openFile", "params": {"path": path}})
     );
 
     {
