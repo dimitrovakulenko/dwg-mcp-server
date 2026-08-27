@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.dimitrovakulenko/dwg-mcp-server",
   "title": "DWG MCP Server",
-  "description": "Read-only MCP server for inspecting AutoCAD DWG files",
-  "version": "0.1.6",
+  "description": "DWG file format access for AI via MCP. Connect DWG files to Claude, ChatGPT, Codex, Cursor, and other AI clients.",
+  "version": "0.2.0",
   "websiteUrl": "https://github.com/dimitrovakulenko/dwg-mcp-server",
   "repository": {
     "url": "https://github.com/dimitrovakulenko/dwg-mcp-server",
@@ -14,7 +14,7 @@
     {
       "registryType": "npm",
       "identifier": "@dmytro-prototypes/dwg-mcp-server",
-      "version": "0.1.6",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       },
@@ -22,14 +22,6 @@
         {
           "name": "DWG_MCP_ALLOWED_ROOTS",
           "description": "Semicolon-separated absolute directories allowed for DWG access when the MCP client, AI agent, or test harness does not provide MCP roots. Optional when MCP roots are supported.",
-          "format": "string",
-          "isRequired": false,
-          "isSecret": false,
-          "placeholder": "/absolute/path/to/dwg/files;/another/dwg/folder"
-        },
-        {
-          "name": "DWG_MCP_DOCKER_MOUNTS",
-          "description": "Semicolon-separated host folders mounted read-only into Docker at their original absolute paths. Access is still authorized by MCP roots or DWG_MCP_ALLOWED_ROOTS. Defaults to DWG_MCP_ALLOWED_ROOTS, then $HOME.",
           "format": "string",
           "isRequired": false,
           "isSecret": false,

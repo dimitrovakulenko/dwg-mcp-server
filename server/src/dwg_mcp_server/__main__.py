@@ -16,7 +16,7 @@ def _env_allowed_roots() -> list[str]:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="dwg-mcp-server",
-        description="Read-only MCP server for inspecting AutoCAD DWG files.",
+        description="Read-only MCP server that gives AI agents access to DWG files.",
     )
     parser.add_argument(
         "--allowed-root",

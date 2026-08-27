@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Sequence
@@ -33,47 +32,6 @@ MUTATING_TOOL = ToolAnnotations(
 )
 
 
-def _split_semicolon_paths(raw_paths: str) -> list[Path]:
-    paths: list[Path] = []
-    for raw_path in raw_paths.split(";"):
-        path_text = raw_path.strip()
-        if path_text:
-            paths.append(Path(path_text).expanduser().resolve(strict=False))
-    return paths
-
-
-def _path_is_within(path: Path, root: Path) -> bool:
-    try:
-        path.resolve(strict=False).relative_to(root.resolve(strict=False))
-        return True
-    except ValueError:
-        return False
-
-
-def _docker_mount_hint(root_path: Path) -> str:
-    if os.environ.get("DWG_MCP_RUNNING_IN_DOCKER") != "1":
-        return ""
-
-    raw_mounts = os.environ.get("DWG_MCP_DOCKER_MOUNTS", "")
-    mounted_paths = _split_semicolon_paths(raw_mounts)
-    if not mounted_paths:
-        return (
-            " The server is running in Docker; set DWG_MCP_DOCKER_MOUNTS to the "
-            "host folders that should be visible inside the container."
-        )
-
-    if any(_path_is_within(root_path, mounted_path) for mounted_path in mounted_paths):
-        return ""
-
-    mounted = ", ".join(str(path) for path in mounted_paths[:3])
-    if len(mounted_paths) > 3:
-        mounted = f"{mounted}, ..."
-    return (
-        " The selected MCP root is not mounted into the Docker container. Add it "
-        f"to DWG_MCP_DOCKER_MOUNTS. Mounted paths: {mounted}"
-    )
-
-
 class DwgMcpApplication:
     def __init__(
         self,
@@ -93,7 +51,7 @@ class DwgMcpApplication:
 
         self.server = Server(
             "dwg-mcp-server",
-            version="0.1.0",
+            version="0.2.0",
             instructions=SERVER_INSTRUCTIONS,
             lifespan=lifespan,
         )
@@ -558,10 +516,7 @@ class DwgMcpApplication:
         try:
             return resolve_root_relative_path(root_path, relative_path), root
         except OSError as error:
-            hint = _docker_mount_hint(root_path)
-            raise ValueError(
-                f"failed to resolve relativePath under MCP root: {error}{hint}"
-            ) from error
+            raise ValueError(f"failed to resolve relativePath under MCP root: {error}") from error
 
     async def _list_client_roots(self) -> list[dict[str, str | None]]:
         try:

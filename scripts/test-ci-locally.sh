@@ -2,14 +2,11 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-target="${1:-$("$root/scripts/detect-libredwg-target.sh")}"
-libredwg_root="$root/.cache/libredwg-root"
 
 cd "$root"
-bash scripts/use-libredwg-prebuilt.sh "$target" "$libredwg_root"
+bash scripts/build-libredwg.sh
 
-export LIBREDWG_ROOT_DIR="$libredwg_root"
-export LIBREDWG_SOURCE_ROOT="$libredwg_root/src"
+export LIBREDWG_SOURCE_ROOT="$root/third_party/libredwg/src"
 
 cargo test --workspace
 cargo build -p dwg-worker

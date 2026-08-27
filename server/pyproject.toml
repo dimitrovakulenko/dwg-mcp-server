@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dwg-mcp-server"
-version = "0.1.0"
-description = "Python MCP host for the DWG worker"
+version = "0.2.0"
+description = "DWG file format access for AI via MCP"
+keywords = ["mcp", "dwg", "dwg-format", "ai-agents", "file-format"]
 requires-python = ">=3.11"
 dependencies = [
   "mcp>=1.26.0,<2",

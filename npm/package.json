@@ -1,9 +1,12 @@
 {
   "name": "@dmytro-prototypes/dwg-mcp-server",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "mcpName": "io.github.dimitrovakulenko/dwg-mcp-server",
-  "description": "Run DWG MCP server via Docker",
+  "description": "DWG file format access for AI via MCP",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "license": "GPL-3.0-or-later",
   "homepage": "https://github.com/dimitrovakulenko/dwg-mcp-server#readme",
   "repository": {
@@ -16,18 +19,28 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
     "model-context-protocol",
     "dwg",
-    "autocad",
-    "cad"
+    "dwg-files",
+    "dwg-format",
+    "ai-agents",
+    "file-format",
+    "libredwg",
+    "claude",
+    "chatgpt",
+    "cursor",
+    "codex"
   ],
   "bin": {
     "dwg-mcp-server": "./bin/cli.js"
   },
   "files": [
-    "bin",
-    "scripts"
+    "bin"
   ],
+  "scripts": {
+    "test": "node --test"
+  },
   "publishConfig": {
     "access": "public"
   }
