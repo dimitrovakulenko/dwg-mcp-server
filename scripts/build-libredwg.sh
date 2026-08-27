@@ -6,6 +6,6 @@ src="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/third_party/libredwg"
 [[ -x "$src/autogen.sh" ]] || { echo "Invalid LibreDWG checkout: $src" >&2; exit 1; }
 
 cd "$src"
-./autogen.sh
+./autogen.sh --force
 ./configure --disable-docs --disable-shared --enable-static --disable-bindings --disable-python
 make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"

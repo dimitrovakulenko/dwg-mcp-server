@@ -80,7 +80,7 @@ jobs:
 
       - name: Restore LibreDWG cache
         id: libredwg-cache
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             third_party/libredwg/src/.libs/libredwg.a
@@ -95,6 +95,15 @@ jobs:
         if: steps.libredwg-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
         shell: msys2 {0}
         run: bash scripts/build-libredwg.sh
+
+      - name: Save LibreDWG cache
+        if: steps.libredwg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            third_party/libredwg/src/.libs/libredwg.a
+            third_party/libredwg/src/config.h
+          key: libredwg-v1-${{ runner.os }}-${{ matrix.target }}-${{ steps.libredwg.outputs.sha }}-${{ hashFiles('scripts/build-libredwg.sh') }}
 
       - name: Restore Cargo cache
         uses: actions/cache@v5
@@ -115,7 +124,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         env:
-          AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ar
+          AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc-ar
           CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
           LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/third_party/libredwg/src
