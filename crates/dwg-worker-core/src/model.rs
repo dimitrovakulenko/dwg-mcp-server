@@ -265,8 +265,7 @@ impl IndexedObject {
 }
 
 fn suppress_by_default(property: &str, value: &Value) -> bool {
-    matches!(property, "points" | "vertices" | "vertex_handles")
-        || is_coordinate_tuple_array(value)
+    matches!(property, "points" | "vertices" | "vertex_handles") || is_coordinate_tuple_array(value)
 }
 
 fn is_coordinate_tuple_array(value: &Value) -> bool {

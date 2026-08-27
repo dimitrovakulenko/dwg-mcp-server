@@ -314,6 +314,18 @@ class SessionManager:
             **(result.result or {}),
         }
 
+    async def list_render_views(self, document_id: str) -> dict[str, Any]:
+        worker = await self._require_session(document_id)
+        result = await worker.call("listRenderViews", {})
+        return {"documentId": document_id, **(result.result or {})}
+
+    async def render_view(self, document_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        worker = await self._require_session(document_id)
+        params = dict(request)
+        params.pop("documentId", None)
+        result = await worker.call("renderView", params)
+        return {"documentId": document_id, **(result.result or {})}
+
     async def close_all(self) -> None:
         async with self._lock:
             items = list(self._sessions.items())

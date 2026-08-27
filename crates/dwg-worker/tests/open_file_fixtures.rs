@@ -119,3 +119,8 @@ fn worker_opens_blocks_and_tables_imperial_without_crashing() {
 fn worker_opens_blocks_and_tables_metric_without_crashing() {
     assert_worker_open_sequence_succeeds("blocks_and_tables_-_metric.dwg");
 }
+
+#[test]
+fn worker_opens_table_fixture_without_crashing() {
+    assert_worker_open_sequence_succeeds("table.dwg");
+}

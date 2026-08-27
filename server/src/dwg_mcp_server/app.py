@@ -8,7 +8,7 @@ from typing import Any, Sequence
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, ToolAnnotations
+from mcp.types import CallToolResult, ImageContent, Tool, ToolAnnotations
 
 from .file_access import (
     file_uri_to_path,
@@ -98,8 +98,15 @@ class DwgMcpApplication:
             return self.tool_definitions()
 
         @self.server.call_tool()
-        async def handle_call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-            return await self.call_tool(name, arguments)
+        async def handle_call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any] | CallToolResult:
+            result = await self.call_tool(name, arguments)
+            if name != "dwg.render_view":
+                return result
+            data = result.pop("data")
+            return CallToolResult(
+                content=[ImageContent(type="image", data=data, mimeType=result["mimeType"])],
+                structuredContent=result,
+            )
 
     def tool_definitions(self) -> list[Tool]:
         return [
@@ -119,7 +126,7 @@ class DwgMcpApplication:
             Tool(
                 name="dwg.open_file",
                 description=(
-                    "Open a DWG from a listed root and return documentId. "
+                    "Open a DWG or DXF from a listed root and return documentId. "
                     "Call dwg.list_roots first, then provide one returned rootUri and a "
                     "relativePath under that root."
                 ),
@@ -133,7 +140,7 @@ class DwgMcpApplication:
                         },
                         "relativePath": {
                             "type": "string",
-                            "description": "Path to the DWG file relative to rootUri.",
+                            "description": "Path to the DWG or DXF file relative to rootUri.",
                         },
                     },
                     "required": ["rootUri", "relativePath"],
@@ -389,6 +396,51 @@ class DwgMcpApplication:
                 },
                 annotations=READ_ONLY_TOOL,
             ),
+            Tool(
+                name="dwg.list_render_views",
+                description="List model space, paper-space layouts, and layout viewports that can be rendered.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"documentId": {"type": "string"}},
+                    "required": ["documentId"],
+                    "additionalProperties": False,
+                },
+                annotations=READ_ONLY_TOOL,
+            ),
+            Tool(
+                name="dwg.render_view",
+                description="Render model space, a paper-space layout, or one layout viewport as PNG or SVG.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "documentId": {"type": "string"},
+                        "target": {
+                            "oneOf": [
+                                {"type": "object", "properties": {"kind": {"const": "model"}}, "required": ["kind"], "additionalProperties": False},
+                                {"type": "object", "properties": {"kind": {"const": "layout"}, "layoutHandle": {"type": "string"}}, "required": ["kind", "layoutHandle"], "additionalProperties": False},
+                                {"type": "object", "properties": {"kind": {"const": "viewport"}, "viewportHandle": {"type": "string"}}, "required": ["kind", "viewportHandle"], "additionalProperties": False},
+                            ]
+                        },
+                        "region": {
+                            "type": "object",
+                            "properties": {
+                                "min": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                                "max": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                            },
+                            "required": ["min", "max"],
+                            "additionalProperties": False,
+                        },
+                        "width": {"type": "integer", "minimum": 1, "maximum": 4096, "default": 1600},
+                        "height": {"type": "integer", "minimum": 1, "maximum": 4096, "default": 1200},
+                        "format": {"type": "string", "enum": ["png", "svg"], "default": "png"},
+                        "background": {"type": "string", "enum": ["model", "paper", "transparent", "white", "black"], "default": "paper"},
+                        "padding": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.02},
+                    },
+                    "required": ["documentId", "target"],
+                    "additionalProperties": False,
+                },
+                annotations=READ_ONLY_TOOL,
+            ),
         ]
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -432,6 +484,10 @@ class DwgMcpApplication:
             )
         if name == "dwg.query_objects":
             return await self.session_manager.query_objects(arguments["documentId"], arguments)
+        if name == "dwg.list_render_views":
+            return await self.session_manager.list_render_views(arguments["documentId"])
+        if name == "dwg.render_view":
+            return await self.session_manager.render_view(arguments["documentId"], arguments)
         raise ValueError(f"unknown tool: {name}")
 
     async def _resolve_open_file_path(self, arguments: dict[str, Any]) -> tuple[Path, dict[str, str | None]]:

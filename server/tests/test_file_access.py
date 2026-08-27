@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from dwg_mcp_server.file_access import (
     ensure_within_roots,
@@ -40,6 +41,14 @@ class FileAccessTests(unittest.TestCase):
         )
         self.assertEqual(resolved, (repo_root() / "testData" / "house_plan.dwg").resolve())
 
+    def test_resolve_root_relative_path_accepts_dxf_under_root(self) -> None:
+        with TemporaryDirectory() as directory:
+            drawing = Path(directory) / "drawing.dxf"
+            drawing.touch()
+            self.assertEqual(
+                resolve_root_relative_path(Path(directory), "drawing.dxf"), drawing.resolve()
+            )
+
     def test_resolve_root_relative_path_rejects_absolute_paths(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be relative"):
             resolve_root_relative_path(repo_root() / "testData", str(repo_root()))
@@ -48,6 +57,6 @@ class FileAccessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "escapes"):
             resolve_root_relative_path(repo_root() / "testData", "../README.md")
 
-    def test_resolve_root_relative_path_rejects_non_dwg_files(self) -> None:
-        with self.assertRaisesRegex(ValueError, ".dwg"):
+    def test_resolve_root_relative_path_rejects_non_cad_files(self) -> None:
+        with self.assertRaisesRegex(ValueError, ".dxf"):
             resolve_root_relative_path(repo_root(), "README.md")

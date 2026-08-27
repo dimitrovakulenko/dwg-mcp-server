@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use dwg_render_core::{RenderOutput, RenderRequest, RenderView};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -27,6 +28,8 @@ pub enum WorkerError {
     BackendUnavailable(String),
     #[error("open file failed: {0}")]
     OpenFailed(String),
+    #[error("resource limit exceeded: {0}")]
+    ResourceLimit(String),
 }
 
 pub trait DwgDocument {
@@ -37,6 +40,16 @@ pub trait DwgDocument {
         &self,
         request: QueryObjectsRequest,
     ) -> Result<QueryObjectsResult, WorkerError>;
+    fn list_render_views(&self) -> Result<Vec<RenderView>, WorkerError> {
+        Err(WorkerError::Unsupported(
+            "rendering is not available for this backend".to_owned(),
+        ))
+    }
+    fn render_view(&self, _request: RenderRequest) -> Result<RenderOutput, WorkerError> {
+        Err(WorkerError::Unsupported(
+            "rendering is not available for this backend".to_owned(),
+        ))
+    }
 }
 
 pub trait BackendFactory {
@@ -209,6 +222,10 @@ impl IndexedDocument {
         }
     }
 
+    pub fn objects(&self) -> &[IndexedObject] {
+        &self.objects
+    }
+
     fn resolve_type_name<'a>(
         &'a self,
         type_name: Option<&'a str>,
@@ -262,17 +279,20 @@ impl IndexedDocument {
         &self.objects[index]
     }
 
-    fn property_value<'a>(&'a self, object: &'a IndexedObject, property: &str) -> Option<&'a Value> {
+    fn property_value<'a>(
+        &'a self,
+        object: &'a IndexedObject,
+        property: &str,
+    ) -> Option<&'a Value> {
         match property {
-            "handle" | "kind" | "typeName" | "type_name" | "genericType" | "generic_type" => {
-                None
-            }
+            "handle" | "kind" | "typeName" | "type_name" | "genericType" | "generic_type" => None,
             _ => object.value_for_property(property),
         }
     }
 
     fn property_string<'a>(&'a self, object: &'a IndexedObject, property: &str) -> Option<&'a str> {
-        self.property_value(object, property).and_then(Value::as_str)
+        self.property_value(object, property)
+            .and_then(Value::as_str)
     }
 
     fn canonical_value_key(value: &Value) -> Option<String> {
@@ -389,9 +409,10 @@ impl IndexedDocument {
                 let mut seen = HashSet::new();
                 let mut indices = Vec::new();
                 for handle in &relation.target_handles {
-                    if let Some(items) =
-                        self.indices_for_property_value(&relation.property, &Value::String(handle.clone()))
-                    {
+                    if let Some(items) = self.indices_for_property_value(
+                        &relation.property,
+                        &Value::String(handle.clone()),
+                    ) {
                         for index in items {
                             if seen.insert(index) {
                                 indices.push(index);
@@ -451,7 +472,12 @@ impl IndexedDocument {
         let mut indexed_sets = Vec::new();
 
         if let Some(type_name) = resolved_type {
-            indexed_sets.push(self.indices_by_type.get(type_name).cloned().unwrap_or_default());
+            indexed_sets.push(
+                self.indices_by_type
+                    .get(type_name)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
         } else if let Some(generic_type) = generic_type {
             indexed_sets.push(
                 self.indices_by_generic
@@ -488,8 +514,11 @@ impl IndexedDocument {
             }
             if let Some(owner_handle) = scope.owner_handle.as_deref() {
                 indexed_sets.push(
-                    self.indices_for_property_value("ownerhandle", &Value::String(owner_handle.to_owned()))
-                        .unwrap_or_default(),
+                    self.indices_for_property_value(
+                        "ownerhandle",
+                        &Value::String(owner_handle.to_owned()),
+                    )
+                    .unwrap_or_default(),
                 );
             }
         }
@@ -515,7 +544,9 @@ impl IndexedDocument {
                 resolved_type_name.is_none_or(|type_name| object.type_name == type_name)
                     && generic_type.is_none_or(|item| object.generic_type == item)
                     && scope.is_none_or(|scope| self.matches_scope(object, scope))
-                    && filters.iter().all(|filter| self.matches_filter(object, filter))
+                    && filters
+                        .iter()
+                        .all(|filter| self.matches_filter(object, filter))
                     && relations
                         .iter()
                         .all(|relation| self.matches_prepared_relation(object, relation))
@@ -529,33 +560,21 @@ impl IndexedDocument {
                 .layout_handle
                 .as_deref()
                 .is_none_or(|layout_handle| object.layout_handle.as_deref() == Some(layout_handle))
-            && scope
-                .block_handle
-                .as_deref()
-                .is_none_or(|block_handle| {
-                    object.container_block_handle.as_deref() == Some(block_handle)
-                })
-            && scope
-                .owner_handle
-                .as_deref()
-                .is_none_or(|owner_handle| {
-                    self.property_string(object, "ownerhandle") == Some(owner_handle)
-                })
+            && scope.block_handle.as_deref().is_none_or(|block_handle| {
+                object.container_block_handle.as_deref() == Some(block_handle)
+            })
+            && scope.owner_handle.as_deref().is_none_or(|owner_handle| {
+                self.property_string(object, "ownerhandle") == Some(owner_handle)
+            })
     }
 
     fn matches_filter(&self, object: &IndexedObject, filter: &PropertyFilter) -> bool {
         match filter.property.as_str() {
-            "handle" => self.match_value(
-                "handle",
-                &Value::String(object.handle.clone()),
-                filter,
-            ),
+            "handle" => self.match_value("handle", &Value::String(object.handle.clone()), filter),
             "kind" => self.match_value("kind", &Value::String(object.kind.clone()), filter),
-            "typeName" | "type_name" => self.match_value(
-                "typeName",
-                &Value::String(object.type_name.clone()),
-                filter,
-            ),
+            "typeName" | "type_name" => {
+                self.match_value("typeName", &Value::String(object.type_name.clone()), filter)
+            }
             "genericType" | "generic_type" => self.match_value(
                 "genericType",
                 &Value::String(object.generic_type.clone()),
@@ -599,7 +618,9 @@ impl IndexedDocument {
                 .value
                 .as_ref()
                 .and_then(|expected| self.compare_values(property, value, expected))
-                .is_some_and(|ordering| ordering == Ordering::Greater || ordering == Ordering::Equal),
+                .is_some_and(|ordering| {
+                    ordering == Ordering::Greater || ordering == Ordering::Equal
+                }),
             FilterOperator::Lt => filter
                 .value
                 .as_ref()
@@ -642,7 +663,10 @@ impl IndexedDocument {
     }
 
     fn compare_strings(&self, _property: &str, left: &str, right: &str) -> Ordering {
-        match (Self::parse_handle_value(left), Self::parse_handle_value(right)) {
+        match (
+            Self::parse_handle_value(left),
+            Self::parse_handle_value(right),
+        ) {
             (Some(left), Some(right)) => left.cmp(&right),
             _ => left.cmp(right),
         }
@@ -664,7 +688,9 @@ impl IndexedDocument {
         match relation.direction {
             RelationDirection::Outgoing => self
                 .property_value(object, &relation.property)
-                .is_some_and(|value| self.value_matches_target_handles(value, &relation.target_handles)),
+                .is_some_and(|value| {
+                    self.value_matches_target_handles(value, &relation.target_handles)
+                }),
             RelationDirection::Incoming => relation.target_indices.iter().any(|index| {
                 self.property_value(self.object(*index), &relation.property)
                     .is_some_and(|value| self.value_contains_handle(value, &object.handle))
@@ -689,7 +715,9 @@ impl IndexedDocument {
     fn value_contains_handle(&self, value: &Value, handle: &str) -> bool {
         match value {
             Value::String(current) => current == handle,
-            Value::Array(items) => items.iter().any(|item| self.value_contains_handle(item, handle)),
+            Value::Array(items) => items
+                .iter()
+                .any(|item| self.value_contains_handle(item, handle)),
             _ => false,
         }
     }
@@ -726,7 +754,9 @@ impl IndexedDocument {
         let right_object = self.object(right_index);
 
         let special = match property {
-            "handle" => Some(self.compare_strings(property, &left_object.handle, &right_object.handle)),
+            "handle" => {
+                Some(self.compare_strings(property, &left_object.handle, &right_object.handle))
+            }
             "kind" => Some(left_object.kind.cmp(&right_object.kind)),
             "typeName" | "type_name" => Some(left_object.type_name.cmp(&right_object.type_name)),
             "genericType" | "generic_type" => {

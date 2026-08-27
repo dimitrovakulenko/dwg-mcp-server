@@ -66,8 +66,8 @@ def resolve_root_relative_path(root_path: Path, relative_path_text: str) -> Path
         raise ValueError("relativePath escapes the selected MCP root") from error
 
     if not resolved_file.is_file():
-        raise ValueError("relativePath must point to a regular DWG file")
-    if resolved_file.suffix.lower() != ".dwg":
-        raise ValueError("relativePath must point to a .dwg file")
+        raise ValueError("relativePath must point to a regular DWG or DXF file")
+    if resolved_file.suffix.lower() not in {".dwg", ".dxf"}:
+        raise ValueError("relativePath must point to a .dwg or .dxf file")
 
     return resolved_file

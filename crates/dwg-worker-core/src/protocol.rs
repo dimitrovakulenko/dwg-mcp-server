@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::model::{GetObjectsRequest, QueryObjectsRequest, TypeDefinition};
+pub use dwg_render_core::{
+    Bounds, RenderBackground, RenderFormat, RenderOutput, RenderRequest, RenderTarget, RenderView,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct RequestEnvelope {
@@ -92,5 +95,12 @@ pub struct HealthResult {
     pub document_open: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRenderViewsResult {
+    pub views: Vec<RenderView>,
+}
+
 pub type GetObjectsParams = GetObjectsRequest;
 pub type QueryObjectsParams = QueryObjectsRequest;
+pub type RenderViewParams = RenderRequest;

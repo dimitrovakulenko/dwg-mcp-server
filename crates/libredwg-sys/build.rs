@@ -15,7 +15,10 @@ fn main() {
     for include_dir in &linkage.include_dirs {
         println!("cargo:include={}", include_dir.display());
     }
-    println!("cargo:rustc-link-search=native={}", linkage.lib_dir.display());
+    println!(
+        "cargo:rustc-link-search=native={}",
+        linkage.lib_dir.display()
+    );
     println!(
         "cargo:rustc-link-search=native={}",
         PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must exist")).display()

@@ -1,0 +1,11 @@
+[package]
+name = "dwg-render-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64.workspace = true
+resvg.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -2,11 +2,13 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+use base64::Engine;
 use dwg_libredwg::{LibreDwgFactory, describe_supported_type, list_supported_types};
 use dwg_worker_core::{
-    BackendFactory, DwgDocument, FilterOperator, GetObjectsRequest, Projection, PropertyFilter,
-    QueryMode, QueryObjectsRequest, QueryScope, QuerySpace, RelationDirection, RelationFilter,
-    SortDirection, SortSpec, StdioHandler,
+    BackendFactory, Bounds, DwgDocument, FilterOperator, GetObjectsRequest, Projection,
+    PropertyFilter, QueryMode, QueryObjectsRequest, QueryScope, QuerySpace, RelationDirection,
+    RelationFilter, RenderBackground, RenderFormat, RenderRequest, RenderTarget, SortDirection,
+    SortSpec, StdioHandler,
 };
 use serde_json::json;
 
@@ -29,6 +31,15 @@ fn dyn_blocks_fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testData/dyn-blocks.dwg")
 }
 
+fn table_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testData/table.dwg")
+}
+
+fn dxf_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../third_party/libredwg/test/test-data/sample_2018.dxf")
+}
+
 fn contains_2d_point(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Array(items) => {
@@ -40,6 +51,174 @@ fn contains_2d_point(value: &serde_json::Value) -> bool {
         serde_json::Value::Object(items) => items.values().any(contains_2d_point),
         _ => false,
     }
+}
+
+#[test]
+fn house_plan_lists_model_layout_and_viewport_render_targets() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&fixture_path())
+        .expect("fixture should open");
+    let views = document
+        .list_render_views()
+        .expect("render views should load");
+
+    assert!(views.iter().any(|view| view.id == "model"));
+    assert!(views.iter().any(|view| view.id == "layout:2F37"));
+    assert!(views.iter().any(|view| view.id == "viewport:2F56"));
+    assert!(!views.iter().any(|view| view.id == "viewport:2F3E"));
+}
+
+#[test]
+fn house_plan_renders_model_svg_and_layout_png() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&fixture_path())
+        .expect("fixture should open");
+
+    let svg = document
+        .render_view(RenderRequest {
+            target: RenderTarget::Model,
+            region: None,
+            width: 320,
+            height: 240,
+            format: RenderFormat::Svg,
+            background: RenderBackground::Paper,
+            padding: 0.02,
+        })
+        .expect("model SVG should render");
+    let svg_bytes = base64::engine::general_purpose::STANDARD
+        .decode(svg.data)
+        .expect("SVG should be base64 encoded");
+    assert!(svg_bytes.starts_with(b"<svg"));
+    let svg_text = std::str::from_utf8(&svg_bytes).expect("SVG should be UTF-8");
+    let bulged_polyline = svg_text
+        .split("data-handle=\"2A75\"")
+        .nth(1)
+        .expect("fixture bulged polyline should render");
+    assert!(
+        bulged_polyline
+            .split("</g>")
+            .next()
+            .expect("polyline group should close")
+            .contains(" A ")
+    );
+    assert!(svg.diagnostics.rendered_entities > 1_000);
+
+    let png = document
+        .render_view(RenderRequest {
+            target: RenderTarget::Layout {
+                layout_handle: "2F37".to_owned(),
+            },
+            region: None,
+            width: 320,
+            height: 240,
+            format: RenderFormat::Png,
+            background: RenderBackground::Paper,
+            padding: 0.02,
+        })
+        .expect("layout PNG should render");
+    let png_bytes = base64::engine::general_purpose::STANDARD
+        .decode(png.data)
+        .expect("PNG should be base64 encoded");
+    assert!(png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(png.diagnostics.rendered_entities > 1_000);
+
+    let region = Bounds {
+        min: [350.0, 650.0],
+        max: [525.0, 850.0],
+    };
+    let viewport_region = document
+        .render_view(RenderRequest {
+            target: RenderTarget::Viewport {
+                viewport_handle: "2F56".to_owned(),
+            },
+            region: Some(region),
+            width: 320,
+            height: 240,
+            format: RenderFormat::Svg,
+            background: RenderBackground::Paper,
+            padding: 0.02,
+        })
+        .expect("viewport region should render");
+    assert_eq!(viewport_region.rendered_region, region);
+}
+
+#[test]
+fn sample_dxf_opens_and_renders_model_svg() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&dxf_fixture_path())
+        .expect("DXF fixture should open");
+    let output = document
+        .render_view(RenderRequest {
+            target: RenderTarget::Model,
+            region: None,
+            width: 320,
+            height: 240,
+            format: RenderFormat::Svg,
+            background: RenderBackground::Paper,
+            padding: 0.02,
+        })
+        .expect("DXF model SVG should render");
+    let svg = base64::engine::general_purpose::STANDARD
+        .decode(output.data)
+        .expect("SVG should be base64 encoded");
+    assert!(svg.starts_with(b"<svg"));
+    assert!(output.diagnostics.rendered_entities > 0);
+}
+
+#[test]
+fn table_fixture_reports_proxy_preview_table_data() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&table_fixture_path())
+        .expect("fixture should open");
+
+    let tables = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("AcDbTable".to_owned()),
+            generic_type: None,
+            where_clauses: Vec::new(),
+            scope: None,
+            relations: Vec::new(),
+            sort: Vec::new(),
+            mode: QueryMode::Full,
+            projection: Projection::Full,
+            select: None,
+            limit: 5,
+            cursor: None,
+        })
+        .expect("table query should work");
+
+    assert_eq!(tables.total, 1);
+    let table = tables.items.first().expect("table should be returned");
+    assert_eq!(table.handle, "64");
+    assert_eq!(table.type_name, "AcDbTable");
+    assert_eq!(table.properties.get("layer"), Some(&json!("10")));
+    assert_eq!(table.properties.get("preview_exists"), Some(&json!(true)));
+    assert_eq!(table.properties.get("preview_size"), Some(&json!(1532)));
+    assert_eq!(
+        table.properties.get("table_extraction_source"),
+        Some(&json!("proxy_preview"))
+    );
+    assert_eq!(table.properties.get("num_rows"), Some(&json!(2)));
+    assert_eq!(table.properties.get("num_cols"), Some(&json!(2)));
+    assert_eq!(table.properties.get("row_heights"), Some(&json!([15, 15])));
+    assert_eq!(table.properties.get("col_widths"), Some(&json!([40, 60])));
+    assert_eq!(
+        table.properties.get("cell_texts"),
+        Some(&json!([["A1", "B1"], ["A2", "B2"]]))
+    );
+    assert_eq!(
+        table.properties.get("cells"),
+        Some(&json!([
+            {"row": 0, "column": 0, "text": "A1", "position": [18.21428571428571, -8.75, 0]},
+            {"row": 0, "column": 1, "text": "B1", "position": [67.85714285714285, -8.75, 0]},
+            {"row": 1, "column": 0, "text": "A2", "position": [17.857142857142854, -23.75, 0]},
+            {"row": 1, "column": 1, "text": "B2", "position": [67.5, -23.75, 0]}
+        ]))
+    );
 }
 
 #[test]
@@ -177,6 +356,7 @@ fn house_plan_lists_expected_types_from_the_file() {
             "AcDbXrecord",
             "BLOCK_CONTROL",
             "DictionaryVariables",
+            "HEADER",
             "LAYER_CONTROL",
             "LTYPE_CONTROL",
             "PLACEHOLDER",
@@ -186,6 +366,67 @@ fn house_plan_lists_expected_types_from_the_file() {
             "VIEW_CONTROL",
             "VPORT_CONTROL",
         ]
+    );
+}
+
+#[test]
+fn house_plan_exposes_header_settings_as_a_synthetic_record() {
+    let _guard = lock_libredwg();
+    let document = LibreDwgFactory
+        .open(&fixture_path())
+        .expect("fixture should open");
+
+    let header = document
+        .query_objects(QueryObjectsRequest {
+            type_name: Some("HEADER".to_owned()),
+            generic_type: None,
+            where_clauses: Vec::new(),
+            scope: None,
+            relations: Vec::new(),
+            sort: Vec::new(),
+            mode: QueryMode::Full,
+            projection: Projection::Full,
+            select: None,
+            limit: 5,
+            cursor: None,
+        })
+        .expect("header query should work");
+
+    assert_eq!(header.total, 1);
+    let header = header
+        .items
+        .first()
+        .expect("header record should be returned");
+    assert_eq!(header.handle, "HEADER");
+    assert_eq!(header.kind, "header");
+    assert_eq!(header.type_name, "HEADER");
+    assert!(
+        header
+            .properties
+            .get("HANDSEED")
+            .and_then(|value| value.as_str())
+            .is_some()
+    );
+    assert!(
+        header
+            .properties
+            .get("CLAYER")
+            .and_then(|value| value.as_str())
+            .is_some()
+    );
+    assert!(
+        header
+            .properties
+            .get("MEASUREMENT")
+            .and_then(|value| value.as_i64())
+            .is_some()
+    );
+    assert!(
+        header
+            .properties
+            .get("INSUNITS")
+            .and_then(|value| value.as_i64())
+            .is_some()
     );
 }
 
@@ -587,6 +828,7 @@ fn supported_types_and_properties_cover_3d_polylines_and_angular_dimensions() {
 
     assert!(supported_names.contains(&"AcDb3dPolyline".to_owned()));
     assert!(supported_names.contains(&"AcDb3PointAngularDimension".to_owned()));
+    assert!(supported_names.contains(&"HEADER".to_owned()));
 
     let polyline_3d =
         describe_supported_type("AcDb3dPolyline").expect("3D polyline type should exist");
@@ -638,6 +880,16 @@ fn supported_types_and_properties_cover_3d_polylines_and_angular_dimensions() {
         .map(|item| item.name)
         .collect::<Vec<_>>();
     assert!(hatch_properties.contains(&"contours".to_owned()));
+
+    let header = describe_supported_type("HEADER").expect("header type should exist");
+    let header_properties = header
+        .properties
+        .into_iter()
+        .map(|item| item.name)
+        .collect::<Vec<_>>();
+    assert!(header_properties.contains(&"DWGCODEPAGE".to_owned()));
+    assert!(header_properties.contains(&"HANDSEED".to_owned()));
+    assert!(header_properties.contains(&"MEASUREMENT".to_owned()));
 }
 
 #[test]

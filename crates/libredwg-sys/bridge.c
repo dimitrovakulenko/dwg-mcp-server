@@ -1,7 +1,9 @@
 #include "bridge.h"
 
 #include <bits.h>
+#include <ctype.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -16,8 +18,17 @@ bridge_dwg_data_new(void)
 int
 bridge_dwg_data_read_file(Dwg_Data *dwg, const char *filename)
 {
+  size_t length;
+
   if (!dwg || !filename)
     return DWG_ERR_IOERROR;
+  length = strlen (filename);
+  if (length >= 4
+      && tolower ((unsigned char)filename[length - 4]) == '.'
+      && tolower ((unsigned char)filename[length - 3]) == 'd'
+      && tolower ((unsigned char)filename[length - 2]) == 'x'
+      && tolower ((unsigned char)filename[length - 1]) == 'f')
+    return dxf_read_file(filename, dwg);
   return dwg_read_file(filename, dwg);
 }
 
@@ -57,6 +68,7 @@ bridge_dwg_object_handle_value(const Dwg_Object *obj)
 }
 
 static const void *bridge_dwg_object_specific_ptr(const Dwg_Object *obj);
+static bool bridge_dwg_object_has_decoded_specific_data (const Dwg_Object *obj);
 
 typedef struct BridgeJsonBuffer
 {
@@ -107,6 +119,8 @@ static bool bridge_json_append_hatch_contour (BridgeJsonBuffer *buffer,
                                               const Dwg_Object *obj,
                                               const Dwg_HATCH_Path *path,
                                               BITCODE_BL index);
+static uint32_t bridge_read_u32_le (const unsigned char *bytes);
+static double bridge_read_double_le (const unsigned char *bytes);
 static bool bridge_type_is_point_array (const char *type);
 static bool bridge_try_read_count_field (const Dwg_Object *obj,
                                         const char *count_field,
@@ -301,6 +315,15 @@ bridge_dwg_object_specific_ptr(const Dwg_Object *obj)
   return NULL;
 }
 
+static bool
+bridge_dwg_object_has_decoded_specific_data (const Dwg_Object *obj)
+{
+  if (!obj)
+    return false;
+  return obj->fixedtype != DWG_TYPE_UNKNOWN_ENT
+         && obj->fixedtype != DWG_TYPE_UNKNOWN_OBJ;
+}
+
 static const Dwg_Object_DICTIONARY *
 bridge_dwg_dictionary_ptr (const Dwg_Object *obj)
 {
@@ -344,6 +367,32 @@ bridge_dwg_hatch_ptr (const Dwg_Object *obj)
       || strcmp (obj->name, "HATCH") != 0)
     return NULL;
   return (const Dwg_Entity_HATCH *)bridge_dwg_object_specific_ptr (obj);
+}
+
+static const Dwg_Entity_LWPOLYLINE *
+bridge_dwg_lwpolyline_ptr (const Dwg_Object *obj)
+{
+  if (!obj || obj->supertype != DWG_SUPERTYPE_ENTITY || !obj->name
+      || strcmp (obj->name, "LWPOLYLINE") != 0)
+    return NULL;
+  return (const Dwg_Entity_LWPOLYLINE *)bridge_dwg_object_specific_ptr (obj);
+}
+
+static const Dwg_Entity_SPLINE *
+bridge_dwg_spline_ptr (const Dwg_Object *obj)
+{
+  if (!obj || obj->supertype != DWG_SUPERTYPE_ENTITY || !obj->name
+      || strcmp (obj->name, "SPLINE") != 0)
+    return NULL;
+  return (const Dwg_Entity_SPLINE *)bridge_dwg_object_specific_ptr (obj);
+}
+
+static const Dwg_Entity_WIPEOUT *
+bridge_dwg_wipeout_ptr (const Dwg_Object *obj)
+{
+  if (!obj || obj->supertype != DWG_SUPERTYPE_ENTITY)
+    return NULL;
+  return (const Dwg_Entity_WIPEOUT *)bridge_dwg_object_specific_ptr (obj);
 }
 
 static const Dwg_DYNAPI_field *
@@ -393,6 +442,23 @@ bridge_read_string_field(const Dwg_Object *obj, const char *fieldname,
 }
 
 static bool
+bridge_read_header_string_field(const Dwg_Data *dwg, const char *fieldname,
+                               BridgeDwgFieldValue *out, Dwg_DYNAPI_field *fp)
+{
+  int isnew = 0;
+  char *text = NULL;
+
+  if (!dwg || !dwg_dynapi_header_utf8text (dwg, fieldname, &text, &isnew, fp)
+      || !text)
+    return false;
+
+  out->kind = BRIDGE_DWG_FIELD_STRING;
+  out->string_value = text;
+  out->owns_string = isnew;
+  return true;
+}
+
+static bool
 bridge_read_raw_field(const Dwg_Object *obj, const char *fieldname, bool is_common,
                      void *buffer, Dwg_DYNAPI_field *fp)
 {
@@ -410,6 +476,16 @@ bridge_read_raw_field(const Dwg_Object *obj, const char *fieldname, bool is_comm
 
   return dwg_dynapi_entity_value((void *)specific, obj->name, fieldname, buffer,
                                  fp);
+}
+
+static bool
+bridge_read_header_raw_field(const Dwg_Data *dwg, const char *fieldname,
+                            void *buffer, Dwg_DYNAPI_field *fp)
+{
+  if (!dwg)
+    return false;
+
+  return dwg_dynapi_header_value (dwg, fieldname, buffer, fp);
 }
 
 static bool
@@ -453,6 +529,227 @@ bridge_try_get_handle_value(const Dwg_Object *obj, BITCODE_H ref,
   return true;
 }
 
+static bool
+bridge_try_get_header_handle_value(const Dwg_Data *dwg, BITCODE_H ref,
+                                  BITCODE_RLL *out_value)
+{
+  if (!out_value)
+    return false;
+
+  *out_value = 0;
+  if (!ref)
+    return true;
+
+  if (!dwg || !bridge_handle_ref_is_known (dwg, ref))
+    return false;
+
+  *out_value = ref->absolute_ref;
+  return true;
+}
+
+static bool
+bridge_try_convert_time_field (const char *type, const BITCODE_TIMEBLL *value,
+                              BridgeDwgFieldValue *out)
+{
+  if (!value || !out
+      || (!bridge_type_matches (type, "TIMEBLL")
+          && !bridge_type_matches (type, "TIMERLL")))
+    return false;
+
+  out->kind = BRIDGE_DWG_FIELD_TIME;
+  out->time_days = value->days;
+  out->time_ms = value->ms;
+  out->time_value = value->value;
+  return true;
+}
+
+bool
+bridge_dwg_header_read_field(const Dwg_Data *dwg, const char *fieldname,
+                             BridgeDwgFieldValue *out)
+{
+  Dwg_DYNAPI_field fp;
+  const Dwg_DYNAPI_field *field;
+
+  if (!dwg || !fieldname || !out)
+    return false;
+  memset (out, 0, sizeof (*out));
+
+  field = dwg_dynapi_header_field (fieldname);
+  if (!field)
+    return false;
+  memcpy (&fp, field, sizeof (fp));
+
+  if (fp.is_string)
+    {
+      if (bridge_type_matches (fp.type, "TF") || bridge_type_matches (fp.type, "TFv"))
+        return false;
+
+      return bridge_read_header_string_field (dwg, fieldname, out, &fp);
+    }
+
+  if (strchr (fp.type, '*'))
+    return false;
+
+  if (strchr (fp.type, 'H'))
+    {
+      BITCODE_H ref = NULL;
+      BITCODE_RLL handle_value = 0;
+      if (fp.size != sizeof (ref))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &ref, &fp))
+        return false;
+      if (!bridge_try_get_header_handle_value (dwg, ref, &handle_value))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_HANDLE;
+      out->handle_value = handle_value;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "2RD") || bridge_type_matches (fp.type, "2BD")
+      || bridge_type_matches (fp.type, "2DD")
+      || bridge_type_matches (fp.type, "2DPOINT"))
+    {
+      dwg_point_2d point;
+      if (fp.size != sizeof (point))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &point, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_POINT2D;
+      out->point_x = point.x;
+      out->point_y = point.y;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "CMC") || bridge_type_matches (fp.type, "CMTC")
+      || bridge_type_matches (fp.type, "ENC"))
+    {
+      Dwg_Color color;
+      if (fp.size != sizeof (color))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &color, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_INTEGER;
+      out->integer_value = color.index;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "3BD") || bridge_type_matches (fp.type, "3BD_1")
+      || bridge_type_matches (fp.type, "3RD") || bridge_type_matches (fp.type, "3DD")
+      || bridge_type_matches (fp.type, "BE")
+      || bridge_type_matches (fp.type, "3DPOINT"))
+    {
+      dwg_point_3d point;
+      if (fp.size != sizeof (point))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &point, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_POINT3D;
+      out->point_x = point.x;
+      out->point_y = point.y;
+      out->point_z = point.z;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "BD") || bridge_type_matches (fp.type, "RD")
+      || bridge_type_matches (fp.type, "BT"))
+    {
+      double value = 0.0;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &value, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_DOUBLE;
+      out->double_value = value;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "B") || bridge_type_matches (fp.type, "BB"))
+    {
+      BITCODE_B value = 0;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &value, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_BOOL;
+      out->integer_value = value != 0;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "RC"))
+    {
+      BITCODE_RC value = 0;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &value, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_INTEGER;
+      out->integer_value = value;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "RS") || bridge_type_matches (fp.type, "BS")
+      || bridge_type_matches (fp.type, "BSd") || bridge_type_matches (fp.type, "RSd"))
+    {
+      BITCODE_BS value = 0;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &value, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_INTEGER;
+      out->integer_value = value;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "RL") || bridge_type_matches (fp.type, "BL"))
+    {
+      BITCODE_BL value = 0;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &value, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_INTEGER;
+      out->integer_value = value;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "BLL") || bridge_type_matches (fp.type, "RLL"))
+    {
+      BITCODE_RLL value = 0;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &value, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_INTEGER;
+      out->integer_value = (long long)value;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "BLd"))
+    {
+      BITCODE_BLd value = 0;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &value, &fp))
+        return false;
+      out->kind = BRIDGE_DWG_FIELD_INTEGER;
+      out->integer_value = (long long)value;
+      return true;
+    }
+
+  if (bridge_type_matches (fp.type, "TIMEBLL")
+      || bridge_type_matches (fp.type, "TIMERLL"))
+    {
+      BITCODE_TIMEBLL value;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_header_raw_field (dwg, fieldname, &value, &fp))
+        return false;
+      return bridge_try_convert_time_field (fp.type, &value, out);
+    }
+
+  return false;
+}
+
 bool
 bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
                             BridgeDwgFieldValue *out)
@@ -460,15 +757,17 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
   Dwg_DYNAPI_field fp;
   const Dwg_DYNAPI_field *field;
   bool is_common;
-  memset(out, 0, sizeof(*out));
 
   if (!obj || !fieldname || !out)
     return false;
+  memset(out, 0, sizeof(*out));
 
   field = bridge_dwg_common_field(obj, fieldname);
   is_common = field != NULL;
   if (!field)
     {
+      if (!bridge_dwg_object_has_decoded_specific_data (obj))
+        return false;
       field = dwg_dynapi_entity_field(obj->name, fieldname);
       if (!field)
         return false;
@@ -585,7 +884,7 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
     }
 
   if (bridge_type_matches(fp.type, "RS") || bridge_type_matches(fp.type, "BS")
-      || bridge_type_matches(fp.type, "BSd"))
+      || bridge_type_matches(fp.type, "BSd") || bridge_type_matches(fp.type, "RSd"))
     {
       BITCODE_BS value = 0;
       if (fp.size != sizeof(value))
@@ -633,7 +932,37 @@ bridge_dwg_object_read_field(const Dwg_Object *obj, const char *fieldname,
       return true;
     }
 
+  if (bridge_type_matches (fp.type, "TIMEBLL")
+      || bridge_type_matches (fp.type, "TIMERLL"))
+    {
+      BITCODE_TIMEBLL value;
+      if (fp.size != sizeof (value))
+        return false;
+      if (!bridge_read_raw_field (obj, fieldname, is_common, &value, &fp))
+        return false;
+      return bridge_try_convert_time_field (fp.type, &value, out);
+    }
+
   return false;
+}
+
+static uint32_t
+bridge_read_u32_le (const unsigned char *bytes)
+{
+  return ((uint32_t)bytes[0]) | ((uint32_t)bytes[1] << 8)
+         | ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+}
+
+static double
+bridge_read_double_le (const unsigned char *bytes)
+{
+  uint64_t raw = ((uint64_t)bytes[0]) | ((uint64_t)bytes[1] << 8)
+                 | ((uint64_t)bytes[2] << 16) | ((uint64_t)bytes[3] << 24)
+                 | ((uint64_t)bytes[4] << 32) | ((uint64_t)bytes[5] << 40)
+                 | ((uint64_t)bytes[6] << 48) | ((uint64_t)bytes[7] << 56);
+  double value;
+  memcpy (&value, &raw, sizeof (value));
+  return value;
 }
 
 static bool
@@ -737,6 +1066,8 @@ bridge_dwg_object_read_field_json (const Dwg_Object *obj, const char *fieldname)
   is_common = field != NULL;
   if (!field)
     {
+      if (!bridge_dwg_object_has_decoded_specific_data (obj))
+        return NULL;
       field = dwg_dynapi_entity_field (obj->name, fieldname);
       if (!field)
         return NULL;
@@ -817,6 +1148,418 @@ bridge_dwg_object_read_field_json (const Dwg_Object *obj, const char *fieldname)
   return buffer.data;
 
 failed:
+  free (buffer.data);
+  return NULL;
+}
+
+typedef struct BridgeProxyTableText
+{
+  double x;
+  double y;
+  double z;
+  char *text;
+} BridgeProxyTableText;
+
+typedef struct BridgeProxyTableLine
+{
+  double x1;
+  double y1;
+  double z1;
+  double x2;
+  double y2;
+  double z2;
+} BridgeProxyTableLine;
+
+static int
+bridge_compare_doubles (const void *left, const void *right)
+{
+  double a = *(const double *)left;
+  double b = *(const double *)right;
+  return (a > b) - (a < b);
+}
+
+static bool
+bridge_append_double (double **items, size_t *count, size_t *capacity,
+                     double value)
+{
+  double *next;
+
+  if (*count == *capacity)
+    {
+      size_t next_capacity = *capacity ? *capacity * 2 : 8;
+      next = (double *)realloc (*items, next_capacity * sizeof (**items));
+      if (!next)
+        return false;
+      *items = next;
+      *capacity = next_capacity;
+    }
+
+  (*items)[(*count)++] = value;
+  return true;
+}
+
+static bool
+bridge_append_proxy_text (BridgeProxyTableText **items, size_t *count,
+                         size_t *capacity, BridgeProxyTableText value)
+{
+  BridgeProxyTableText *next;
+
+  if (*count == *capacity)
+    {
+      size_t next_capacity = *capacity ? *capacity * 2 : 8;
+      next = (BridgeProxyTableText *)realloc (*items,
+                                             next_capacity * sizeof (**items));
+      if (!next)
+        return false;
+      *items = next;
+      *capacity = next_capacity;
+    }
+
+  (*items)[(*count)++] = value;
+  return true;
+}
+
+static bool
+bridge_append_proxy_line (BridgeProxyTableLine **items, size_t *count,
+                         size_t *capacity, BridgeProxyTableLine value)
+{
+  BridgeProxyTableLine *next;
+
+  if (*count == *capacity)
+    {
+      size_t next_capacity = *capacity ? *capacity * 2 : 8;
+      next = (BridgeProxyTableLine *)realloc (*items,
+                                             next_capacity * sizeof (**items));
+      if (!next)
+        return false;
+      *items = next;
+      *capacity = next_capacity;
+    }
+
+  (*items)[(*count)++] = value;
+  return true;
+}
+
+static char *
+bridge_proxy_utf16le_string (const unsigned char *bytes, size_t length)
+{
+  size_t chars = 0;
+  char *text;
+
+  while ((chars + 1) * 2 <= length)
+    {
+      uint16_t ch = (uint16_t)bytes[chars * 2]
+                    | ((uint16_t)bytes[chars * 2 + 1] << 8);
+      if (ch == 0)
+        break;
+      chars++;
+    }
+
+  if (chars == 0)
+    return NULL;
+
+  text = (char *)calloc (chars + 1, 1);
+  if (!text)
+    return NULL;
+
+  for (size_t index = 0; index < chars; index++)
+    {
+      uint16_t ch = (uint16_t)bytes[index * 2]
+                    | ((uint16_t)bytes[index * 2 + 1] << 8);
+      text[index] = ch >= 0x20 && ch <= 0x7E ? (char)ch : '?';
+    }
+
+  return text;
+}
+
+static size_t
+bridge_unique_sorted_doubles (double *items, size_t count)
+{
+  size_t output = 0;
+  const double epsilon = 1e-9;
+
+  if (!items || count == 0)
+    return 0;
+
+  qsort (items, count, sizeof (*items), bridge_compare_doubles);
+  for (size_t index = 0; index < count; index++)
+    {
+      if (output == 0 || fabs (items[index] - items[output - 1]) > epsilon)
+        items[output++] = items[index];
+    }
+  return output;
+}
+
+static int
+bridge_find_proxy_table_column (const double *x_values, size_t count, double x)
+{
+  const double epsilon = 1e-9;
+
+  if (!x_values || count < 2)
+    return -1;
+
+  for (size_t index = 0; index + 1 < count; index++)
+    {
+      if (x >= x_values[index] - epsilon && x <= x_values[index + 1] + epsilon)
+        return (int)index;
+    }
+  return -1;
+}
+
+static int
+bridge_find_proxy_table_row (const double *y_values, size_t count, double y)
+{
+  const double epsilon = 1e-9;
+
+  if (!y_values || count < 2)
+    return -1;
+
+  for (size_t index = 0; index + 1 < count; index++)
+    {
+      if (y >= y_values[index] - epsilon && y <= y_values[index + 1] + epsilon)
+        return (int)(count - 2 - index);
+    }
+  return -1;
+}
+
+static const BridgeProxyTableText *
+bridge_proxy_table_cell_text (const BridgeProxyTableText *texts,
+                             const int *text_rows, const int *text_cols,
+                             size_t text_count, size_t row, size_t col)
+{
+  for (size_t index = 0; index < text_count; index++)
+    {
+      if (text_rows[index] == (int)row && text_cols[index] == (int)col)
+        return &texts[index];
+    }
+  return NULL;
+}
+
+char *
+bridge_dwg_object_proxy_table_json (const Dwg_Object *obj)
+{
+  Dwg_Object_Entity *entity;
+  const unsigned char *preview;
+  size_t preview_size;
+  uint32_t total_size;
+  uint32_t record_count;
+  size_t offset = 8;
+  BridgeProxyTableText *texts = NULL;
+  size_t text_count = 0;
+  size_t text_capacity = 0;
+  BridgeProxyTableLine *lines = NULL;
+  size_t line_count = 0;
+  size_t line_capacity = 0;
+  double *x_values = NULL;
+  double *y_values = NULL;
+  size_t x_count = 0;
+  size_t y_count = 0;
+  size_t x_capacity = 0;
+  size_t y_capacity = 0;
+  int *text_rows = NULL;
+  int *text_cols = NULL;
+  BridgeJsonBuffer buffer = { 0 };
+
+  if (!obj || !obj->name || strcmp (obj->name, "TABLE") != 0
+      || obj->supertype != DWG_SUPERTYPE_ENTITY || !obj->tio.entity
+      || obj->fixedtype != DWG_TYPE_UNKNOWN_ENT)
+    return NULL;
+
+  entity = obj->tio.entity;
+  preview = (const unsigned char *)entity->preview;
+  preview_size = (size_t)entity->preview_size;
+  if (!preview || preview_size < 12 || preview_size > 1024 * 1024)
+    return NULL;
+
+  total_size = bridge_read_u32_le (preview);
+  record_count = bridge_read_u32_le (preview + 4);
+  if (total_size != preview_size || record_count == 0 || record_count > 10000)
+    return NULL;
+
+  for (uint32_t record_index = 0;
+       record_index < record_count && offset + 8 <= preview_size;
+       record_index++)
+    {
+      uint32_t record_size = bridge_read_u32_le (preview + offset);
+      uint32_t opcode = bridge_read_u32_le (preview + offset + 4);
+      const unsigned char *payload = preview + offset + 8;
+      size_t payload_size;
+
+      if (record_size < 8 || offset + record_size > preview_size)
+        goto failed;
+
+      payload_size = (size_t)record_size - 8;
+      if (opcode == 0x26 && payload_size >= 76)
+        {
+          char *text = bridge_proxy_utf16le_string (payload + 72,
+                                                   payload_size - 72);
+          if (text)
+            {
+              BridgeProxyTableText item;
+              item.x = bridge_read_double_le (payload);
+              item.y = bridge_read_double_le (payload + 8);
+              item.z = bridge_read_double_le (payload + 16);
+              item.text = text;
+              if (!bridge_append_proxy_text (&texts, &text_count,
+                                             &text_capacity, item))
+                {
+                  free (text);
+                  goto failed;
+                }
+            }
+        }
+      else if (opcode == 0x20 && payload_size >= 52
+               && bridge_read_u32_le (payload) == 2)
+        {
+          BridgeProxyTableLine line;
+          line.x1 = bridge_read_double_le (payload + 4);
+          line.y1 = bridge_read_double_le (payload + 12);
+          line.z1 = bridge_read_double_le (payload + 20);
+          line.x2 = bridge_read_double_le (payload + 28);
+          line.y2 = bridge_read_double_le (payload + 36);
+          line.z2 = bridge_read_double_le (payload + 44);
+          if (!bridge_append_proxy_line (&lines, &line_count, &line_capacity,
+                                         line))
+            goto failed;
+        }
+
+      offset += record_size;
+    }
+
+  if (text_count == 0 || line_count == 0)
+    goto failed;
+
+  for (size_t index = 0; index < line_count; index++)
+    {
+      const double epsilon = 1e-9;
+      BridgeProxyTableLine *line = &lines[index];
+      if (fabs (line->y1 - line->y2) <= epsilon
+          && fabs (line->x1 - line->x2) > epsilon)
+        {
+          if (!bridge_append_double (&y_values, &y_count, &y_capacity, line->y1))
+            goto failed;
+        }
+      else if (fabs (line->x1 - line->x2) <= epsilon
+               && fabs (line->y1 - line->y2) > epsilon)
+        {
+          if (!bridge_append_double (&x_values, &x_count, &x_capacity, line->x1))
+            goto failed;
+        }
+    }
+
+  x_count = bridge_unique_sorted_doubles (x_values, x_count);
+  y_count = bridge_unique_sorted_doubles (y_values, y_count);
+  if (x_count < 2 || y_count < 2)
+    goto failed;
+
+  text_rows = (int *)calloc (text_count, sizeof (*text_rows));
+  text_cols = (int *)calloc (text_count, sizeof (*text_cols));
+  if (!text_rows || !text_cols)
+    goto failed;
+
+  for (size_t index = 0; index < text_count; index++)
+    {
+      text_cols[index] = bridge_find_proxy_table_column (x_values, x_count,
+                                                        texts[index].x);
+      text_rows[index] = bridge_find_proxy_table_row (y_values, y_count,
+                                                     texts[index].y);
+    }
+
+  if (!bridge_json_buffer_appendf (
+          &buffer,
+          "{\"table_extraction_source\":\"proxy_preview\",\"num_rows\":%zu,\"num_cols\":%zu,\"row_heights\":[",
+          y_count - 1, x_count - 1))
+    goto failed;
+
+  for (size_t row = y_count - 1; row > 0; row--)
+    {
+      if (row != y_count - 1 && !bridge_json_buffer_append_char (&buffer, ','))
+        goto failed;
+      if (!bridge_json_buffer_appendf (&buffer, "%.17g",
+                                      y_values[row] - y_values[row - 1]))
+        goto failed;
+    }
+
+  if (!bridge_json_buffer_append_cstr (&buffer, "],\"col_widths\":["))
+    goto failed;
+  for (size_t col = 0; col + 1 < x_count; col++)
+    {
+      if (col > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+        goto failed;
+      if (!bridge_json_buffer_appendf (&buffer, "%.17g",
+                                      x_values[col + 1] - x_values[col]))
+        goto failed;
+    }
+
+  if (!bridge_json_buffer_append_cstr (&buffer, "],\"cell_texts\":["))
+    goto failed;
+  for (size_t row = 0; row + 1 < y_count; row++)
+    {
+      if (row > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+        goto failed;
+      if (!bridge_json_buffer_append_char (&buffer, '['))
+        goto failed;
+      for (size_t col = 0; col + 1 < x_count; col++)
+        {
+          const BridgeProxyTableText *text
+              = bridge_proxy_table_cell_text (texts, text_rows, text_cols,
+                                             text_count, row, col);
+          if (col > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+            goto failed;
+          if (text)
+            {
+              if (!bridge_json_buffer_append_json_string (&buffer, text->text))
+                goto failed;
+            }
+          else if (!bridge_json_buffer_append_cstr (&buffer, "null"))
+            goto failed;
+        }
+      if (!bridge_json_buffer_append_char (&buffer, ']'))
+        goto failed;
+    }
+
+  if (!bridge_json_buffer_append_cstr (&buffer, "],\"cells\":["))
+    goto failed;
+  for (size_t index = 0, emitted = 0; index < text_count; index++)
+    {
+      if (text_rows[index] < 0 || text_cols[index] < 0)
+        continue;
+      if (emitted++ > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+        goto failed;
+      if (!bridge_json_buffer_appendf (
+              &buffer,
+              "{\"row\":%d,\"column\":%d,\"text\":",
+              text_rows[index], text_cols[index])
+          || !bridge_json_buffer_append_json_string (&buffer, texts[index].text)
+          || !bridge_json_buffer_appendf (
+                 &buffer,
+                 ",\"position\":[%.17g,%.17g,%.17g]}",
+                 texts[index].x, texts[index].y, texts[index].z))
+        goto failed;
+    }
+
+  if (!bridge_json_buffer_append_cstr (&buffer, "]}"))
+    goto failed;
+
+  for (size_t index = 0; index < text_count; index++)
+    free (texts[index].text);
+  free (texts);
+  free (lines);
+  free (x_values);
+  free (y_values);
+  free (text_rows);
+  free (text_cols);
+  return buffer.data;
+
+failed:
+  for (size_t index = 0; index < text_count; index++)
+    free (texts[index].text);
+  free (texts);
+  free (lines);
+  free (x_values);
+  free (y_values);
+  free (text_rows);
+  free (text_cols);
   free (buffer.data);
   return NULL;
 }
@@ -1661,6 +2404,128 @@ bridge_dwg_object_hatch_contours_json (const Dwg_Object *obj)
     }
 
   if (!bridge_json_buffer_append_char (&buffer, ']'))
+    goto failed;
+  return buffer.data;
+
+failed:
+  free (buffer.data);
+  return NULL;
+}
+
+char *
+bridge_dwg_object_lwpolyline_geometry_json (const Dwg_Object *obj)
+{
+  const Dwg_Entity_LWPOLYLINE *polyline = bridge_dwg_lwpolyline_ptr (obj);
+  BridgeJsonBuffer buffer = { 0 };
+
+  if (!polyline || (polyline->num_points > 0 && !polyline->points)
+      || (polyline->num_bulges > 0 && !polyline->bulges))
+    return NULL;
+  if (!bridge_json_buffer_append_cstr (&buffer, "{\"points\":["))
+    goto failed;
+  for (BITCODE_BL index = 0; index < polyline->num_points; index++)
+    {
+      if ((index > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+          || !bridge_json_append_point2rd (&buffer, polyline->points[index]))
+        goto failed;
+    }
+  if (!bridge_json_buffer_append_cstr (&buffer, "],\"bulges\":["))
+    goto failed;
+  for (BITCODE_BL index = 0; index < polyline->num_points; index++)
+    {
+      double bulge = index < polyline->num_bulges ? polyline->bulges[index] : 0.0;
+      if ((index > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+          || !bridge_json_buffer_appendf (&buffer, "%.17g", bulge))
+        goto failed;
+    }
+  if (!bridge_json_buffer_append_char (&buffer, ']')
+      || !bridge_json_buffer_append_char (&buffer, '}'))
+    goto failed;
+  return buffer.data;
+
+failed:
+  free (buffer.data);
+  return NULL;
+}
+
+char *
+bridge_dwg_object_spline_geometry_json (const Dwg_Object *obj)
+{
+  const Dwg_Entity_SPLINE *spline = bridge_dwg_spline_ptr (obj);
+  BridgeJsonBuffer buffer = { 0 };
+
+  if (!spline || (spline->num_knots > 0 && !spline->knots)
+      || (spline->num_ctrl_pts > 0 && !spline->ctrl_pts)
+      || (spline->num_fit_pts > 0 && !spline->fit_pts))
+    return NULL;
+  if (!bridge_json_buffer_appendf (
+          &buffer,
+          "{\"scenario\":%d,\"degree\":%d,\"isRational\":%s,\"isPeriodic\":%s,\"isClosed\":%s,\"knots\":[",
+          (int)spline->scenario, (int)spline->degree,
+          spline->rational ? "true" : "false",
+          spline->periodic ? "true" : "false",
+          spline->closed_b ? "true" : "false"))
+    goto failed;
+  for (BITCODE_BL index = 0; index < spline->num_knots; index++)
+    {
+      if ((index > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+          || !bridge_json_buffer_appendf (&buffer, "%.17g", spline->knots[index]))
+        goto failed;
+    }
+  if (!bridge_json_buffer_append_cstr (&buffer, "],\"controlPoints\":["))
+    goto failed;
+  for (BITCODE_BL index = 0; index < spline->num_ctrl_pts; index++)
+    {
+      const Dwg_SPLINE_control_point *control = &spline->ctrl_pts[index];
+      if ((index > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+          || !bridge_json_buffer_appendf (
+                 &buffer,
+                 "{\"point\":[%.17g,%.17g,%.17g],\"weight\":%.17g}",
+                 control->x, control->y, control->z,
+                 spline->rational ? control->w : 1.0))
+        goto failed;
+    }
+  if (!bridge_json_buffer_append_cstr (&buffer, "],\"fitPoints\":["))
+    goto failed;
+  for (BITCODE_BL index = 0; index < spline->num_fit_pts; index++)
+    {
+      const BITCODE_3DPOINT point = spline->fit_pts[index];
+      if ((index > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+          || !bridge_json_buffer_appendf (&buffer, "[%.17g,%.17g,%.17g]",
+                                         point.x, point.y, point.z))
+        goto failed;
+    }
+  if (!bridge_json_buffer_appendf (
+          &buffer,
+          "],\"startTangent\":[%.17g,%.17g,%.17g],\"endTangent\":[%.17g,%.17g,%.17g]}",
+          spline->beg_tan_vec.x, spline->beg_tan_vec.y, spline->beg_tan_vec.z,
+          spline->end_tan_vec.x, spline->end_tan_vec.y, spline->end_tan_vec.z))
+    goto failed;
+  return buffer.data;
+
+failed:
+  free (buffer.data);
+  return NULL;
+}
+
+char *
+bridge_dwg_object_wipeout_geometry_json (const Dwg_Object *obj)
+{
+  const Dwg_Entity_WIPEOUT *wipeout = bridge_dwg_wipeout_ptr (obj);
+  BridgeJsonBuffer buffer = { 0 };
+
+  if (!wipeout || wipeout->num_clip_verts > 5000
+      || (wipeout->num_clip_verts > 0 && !wipeout->clip_verts))
+    return NULL;
+  if (!bridge_json_buffer_append_cstr (&buffer, "{\"clip_verts\":["))
+    goto failed;
+  for (BITCODE_BL index = 0; index < wipeout->num_clip_verts; index++)
+    {
+      if ((index > 0 && !bridge_json_buffer_append_char (&buffer, ','))
+          || !bridge_json_append_point2rd (&buffer, wipeout->clip_verts[index]))
+        goto failed;
+    }
+  if (!bridge_json_buffer_append_cstr (&buffer, "]}"))
     goto failed;
   return buffer.data;
 

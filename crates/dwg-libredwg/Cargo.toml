@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dwg-render-core = { path = "../dwg-render-core" }
 dwg-worker-core = { path = "../dwg-worker-core" }
 serde_json.workspace = true
 thiserror.workspace = true
@@ -15,3 +16,6 @@ optional = true
 [features]
 default = ["native"]
 native = ["dep:libredwg-sys"]
+
+[dev-dependencies]
+base64.workspace = true

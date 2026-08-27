@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use dwg_worker_core::{PropertyDefinition, TypeDefinition, WorkerError};
 
 static CATALOG: OnceLock<Result<SchemaCatalog, WorkerError>> = OnceLock::new();
+const HEADER_SOURCE_NAME: &str = "HEADER";
 
 #[derive(Clone, Debug)]
 struct SchemaType {
@@ -57,6 +58,7 @@ impl SchemaCatalog {
         let common_object_properties =
             parse_common_field_definitions(&dynapi, "_dwg_object_object_fields[]")?;
         let properties_by_source = parse_field_definitions(&dynapi)?;
+        let header_properties = parse_header_field_definitions(&dynapi)?;
 
         let mut types_by_source = HashMap::new();
         let mut lookup_to_source = HashMap::new();
@@ -97,6 +99,18 @@ impl SchemaCatalog {
 
             types_by_source.insert(source_name.clone(), schema_type);
         }
+
+        ordered_sources.push(HEADER_SOURCE_NAME.to_owned());
+        lookup_to_source.insert(HEADER_SOURCE_NAME.to_owned(), HEADER_SOURCE_NAME.to_owned());
+        types_by_source.insert(
+            HEADER_SOURCE_NAME.to_owned(),
+            SchemaType {
+                source_name: HEADER_SOURCE_NAME.to_owned(),
+                canonical_name: HEADER_SOURCE_NAME.to_owned(),
+                aliases: Vec::new(),
+                properties: header_properties,
+            },
+        );
 
         Ok(Self {
             types_by_source,
@@ -324,18 +338,9 @@ fn parse_field_definitions(
             continue;
         }
 
-        let field_name = &parts[0];
-        if field_name == "parent" {
-            continue;
+        if let Some(property) = build_property_definition(&parts[0], &parts[1], false) {
+            current_properties.push(property);
         }
-
-        current_properties.push(PropertyDefinition {
-            name: field_name.clone(),
-            value_kind: classify_field_kind(&parts[1]),
-            description: None,
-            queryable: is_queryable_field(field_name, &parts[1]),
-            reference_target: parts[1].contains('H').then(|| "handle".to_owned()),
-        });
     }
 
     if properties_by_type.is_empty() {
@@ -347,13 +352,28 @@ fn parse_field_definitions(
     Ok(properties_by_type)
 }
 
+fn parse_header_field_definitions(content: &str) -> Result<Vec<PropertyDefinition>, WorkerError> {
+    let body = extract_block(
+        content,
+        "static const Dwg_DYNAPI_field _dwg_header_variables_fields[] = {",
+    )?;
+    let properties = parse_properties_block(body, true);
+    if properties.is_empty() {
+        return Err(WorkerError::BackendUnavailable(
+            "failed to parse header variable definitions from dynapi.c".to_owned(),
+        ));
+    }
+
+    Ok(properties)
+}
+
 fn parse_common_field_definitions(
     content: &str,
     marker_suffix: &str,
 ) -> Result<Vec<PropertyDefinition>, WorkerError> {
     let marker = format!("static const Dwg_DYNAPI_field {marker_suffix} = {{");
     let body = extract_block(content, &marker)?;
-    let properties = parse_properties_block(body);
+    let properties = parse_properties_block(body, false);
     if properties.is_empty() {
         return Err(WorkerError::BackendUnavailable(format!(
             "failed to parse common field definitions from `{marker}`"
@@ -378,7 +398,7 @@ fn extract_block<'a>(content: &'a str, marker: &str) -> Result<&'a str, WorkerEr
     Ok(&body[..end])
 }
 
-fn parse_properties_block(body: &str) -> Vec<PropertyDefinition> {
+fn parse_properties_block(body: &str, is_header: bool) -> Vec<PropertyDefinition> {
     let mut properties = Vec::new();
 
     for line in body.lines() {
@@ -387,21 +407,30 @@ fn parse_properties_block(body: &str) -> Vec<PropertyDefinition> {
             continue;
         }
 
-        let field_name = &parts[0];
-        if field_name == "parent" || field_name == "dwg" || field_name == "eed" {
-            continue;
+        if let Some(property) = build_property_definition(&parts[0], &parts[1], is_header) {
+            properties.push(property);
         }
-
-        properties.push(PropertyDefinition {
-            name: field_name.clone(),
-            value_kind: classify_field_kind(&parts[1]),
-            description: None,
-            queryable: is_queryable_field(field_name, &parts[1]),
-            reference_target: parts[1].contains('H').then(|| "handle".to_owned()),
-        });
     }
 
     properties
+}
+
+fn build_property_definition(
+    field_name: &str,
+    raw_kind: &str,
+    is_header: bool,
+) -> Option<PropertyDefinition> {
+    if matches!(field_name, "parent" | "dwg" | "eed") {
+        return None;
+    }
+
+    Some(PropertyDefinition {
+        name: field_name.to_owned(),
+        value_kind: classify_field_kind(raw_kind),
+        description: None,
+        queryable: is_queryable_field(field_name, raw_kind, is_header),
+        reference_target: raw_kind.contains('H').then(|| "handle".to_owned()),
+    })
 }
 
 fn extract_first_quoted(line: &str) -> Option<String> {
@@ -457,7 +486,11 @@ fn is_generic_alias(alias: &str) -> bool {
 }
 
 fn classify_field_kind(raw_kind: &str) -> String {
-    if matches!(raw_kind, "CMC" | "CMTC" | "ENC") {
+    if matches!(raw_kind, "TF" | "TFv") {
+        "binary".to_owned()
+    } else if matches!(raw_kind, "TIMEBLL" | "TIMERLL") {
+        "object".to_owned()
+    } else if matches!(raw_kind, "CMC" | "CMTC" | "ENC") {
         "color".to_owned()
     } else if raw_kind.contains('H') {
         "handle".to_owned()
@@ -478,8 +511,15 @@ fn classify_field_kind(raw_kind: &str) -> String {
     }
 }
 
-fn is_queryable_field(field_name: &str, raw_kind: &str) -> bool {
-    if field_name == "parent" || field_name.starts_with("unknown") {
+fn is_queryable_field(field_name: &str, raw_kind: &str, is_header: bool) -> bool {
+    if field_name == "parent"
+        || field_name.starts_with("unknown")
+        || matches!(raw_kind, "TF" | "TFv")
+    {
+        return false;
+    }
+
+    if is_header && field_name == "layer_colors" {
         return false;
     }
 
@@ -691,6 +731,16 @@ fn choose_default_select(property_names: &[String]) -> Vec<String> {
         "tag",
         "text",
         "text_value",
+        "ACADVER",
+        "DWGCODEPAGE",
+        "MEASUREMENT",
+        "INSUNITS",
+        "LUNITS",
+        "HANDSEED",
+        "CLAYER",
+        "num_rows",
+        "num_cols",
+        "cell_texts",
         "layer",
         "ownerhandle",
         "xdicobjhandle",

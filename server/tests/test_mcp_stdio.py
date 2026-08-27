@@ -50,6 +50,8 @@ class McpStdioTests(unittest.TestCase):
         self.assertIn("dwg.describe_type", tool_names)
         self.assertIn("dwg.get_objects", tool_names)
         self.assertIn("dwg.query_objects", tool_names)
+        self.assertIn("dwg.list_render_views", tool_names)
+        self.assertIn("dwg.render_view", tool_names)
 
         roots = self.client.request("tools/call", {"name": "dwg.list_roots", "arguments": {}})
         self.assertEqual(
@@ -126,6 +128,51 @@ class McpStdioTests(unittest.TestCase):
         self.assertEqual(fetched["items"][0]["handle"], layer_handles[0])
         self.assertEqual(fetched["items"][0]["properties"]["name"], "0")
         self.assertEqual(fetched["missingHandles"], ["missing-handle"])
+
+        header = self.client.request(
+            "tools/call",
+            {
+                "name": "dwg.query_objects",
+                "arguments": {
+                    "documentId": document_id,
+                    "typeName": "HEADER",
+                    "mode": "full",
+                    "limit": 1,
+                },
+            },
+        )["result"]["structuredContent"]
+        self.assertEqual(header["total"], 1)
+        self.assertEqual(header["items"][0]["handle"], "HEADER")
+        self.assertEqual(header["items"][0]["kind"], "header")
+        self.assertIn("HANDSEED", header["items"][0]["properties"])
+        self.assertIn("CLAYER", header["items"][0]["properties"])
+
+        views = self.client.request(
+            "tools/call",
+            {
+                "name": "dwg.list_render_views",
+                "arguments": {"documentId": document_id},
+            },
+        )["result"]["structuredContent"]
+        self.assertIn("model", {view["id"] for view in views["views"]})
+
+        rendered = self.client.request(
+            "tools/call",
+            {
+                "name": "dwg.render_view",
+                "arguments": {
+                    "documentId": document_id,
+                    "target": {"kind": "layout", "layoutHandle": "2F37"},
+                    "width": 320,
+                    "height": 240,
+                    "format": "png",
+                },
+            },
+        )["result"]
+        self.assertEqual(rendered["content"][0]["type"], "image")
+        self.assertEqual(rendered["content"][0]["mimeType"], "image/png")
+        self.assertNotIn("data", rendered["structuredContent"])
+        self.assertGreater(rendered["structuredContent"]["renderedEntities"], 1000)
 
         closed = self.client.request(
             "tools/call",

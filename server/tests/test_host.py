@@ -103,6 +103,8 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 "dwg.describe_type",
                 "dwg.get_objects",
                 "dwg.query_objects",
+                "dwg.list_render_views",
+                "dwg.render_view",
             ],
         )
 
@@ -182,11 +184,62 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(queried["handles"]), 2)
         self.assertEqual(queried["nextCursor"], "2")
 
+        views = await self.app.call_tool(
+            "dwg.list_render_views",
+            {"documentId": opened["documentId"]},
+        )
+        view_ids = {view["id"] for view in views["views"]}
+        self.assertIn("model", view_ids)
+        self.assertIn("layout:2F37", view_ids)
+        self.assertIn("viewport:2F56", view_ids)
+
+        rendered = await self.app.call_tool(
+            "dwg.render_view",
+            {
+                "documentId": opened["documentId"],
+                "target": {"kind": "layout", "layoutHandle": "2F37"},
+                "width": 320,
+                "height": 240,
+                "format": "svg",
+            },
+        )
+        self.assertEqual(rendered["mimeType"], "image/svg+xml")
+        self.assertTrue(rendered["data"].startswith("PHN2Zy"))
+        self.assertGreater(rendered["renderedEntities"], 1000)
+
         closed = await self.app.call_tool(
             "dwg.close_file",
             {"documentId": opened["documentId"]},
         )
         self.assertTrue(closed["closed"])
+
+    async def test_header_settings_are_queryable(self) -> None:
+        described = await self.app.call_tool(
+            "dwg.describe_type",
+            {"typeName": "HEADER"},
+        )
+        property_names = {item["name"] for item in described["properties"]}
+        self.assertIn("DWGCODEPAGE", property_names)
+        self.assertIn("HANDSEED", property_names)
+        self.assertIn("MEASUREMENT", property_names)
+
+        opened = await self.app.call_tool("dwg.open_file", house_plan_open_args())
+        header = await self.app.call_tool(
+            "dwg.query_objects",
+            {
+                "documentId": opened["documentId"],
+                "typeName": "HEADER",
+                "mode": "full",
+                "limit": 1,
+            },
+        )
+
+        self.assertEqual(header["total"], 1)
+        self.assertEqual(header["items"][0]["handle"], "HEADER")
+        self.assertEqual(header["items"][0]["kind"], "header")
+        self.assertIn("HANDSEED", header["items"][0]["properties"])
+        self.assertIn("CLAYER", header["items"][0]["properties"])
+        self.assertIn("INSUNITS", header["items"][0]["properties"])
 
     async def test_get_objects_includes_insertion_points(self) -> None:
         opened = await self.app.call_tool("dwg.open_file", house_plan_open_args())

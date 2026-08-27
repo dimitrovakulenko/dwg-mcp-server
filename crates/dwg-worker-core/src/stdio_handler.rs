@@ -8,8 +8,8 @@ use serde_json::Value;
 use crate::backend::{BackendFactory, DwgDocument, WorkerError};
 use crate::protocol::{
     CloseFileResult, DescribeTypeParams, GetObjectsParams, HealthResult, ListFileTypesResult,
-    ListTypesParams, ListTypesResult, OpenFileParams, OpenFileResult, QueryObjectsParams,
-    RequestEnvelope, ResponseEnvelope, ResponseError,
+    ListRenderViewsResult, ListTypesParams, ListTypesResult, OpenFileParams, OpenFileResult,
+    QueryObjectsParams, RenderViewParams, RequestEnvelope, ResponseEnvelope, ResponseError,
 };
 
 pub struct StdioHandler<F: BackendFactory> {
@@ -69,6 +69,8 @@ impl<F: BackendFactory> StdioHandler<F> {
             "describeType" => self.handle_describe_type(request.id, request.params),
             "getObjects" => self.handle_get_objects(request.id, request.params),
             "queryObjects" => self.handle_query_objects(request.id, request.params),
+            "listRenderViews" => self.handle_list_render_views(request.id),
+            "renderView" => self.handle_render_view(request.id, request.params),
             _ => self.error_response(
                 request.id,
                 WorkerError::InvalidRequest(format!("unknown method {}", request.method)),
@@ -196,6 +198,32 @@ impl<F: BackendFactory> StdioHandler<F> {
         }
     }
 
+    fn handle_list_render_views(&mut self, id: u64) -> ResponseEnvelope {
+        match self
+            .require_document()
+            .and_then(DwgDocument::list_render_views)
+        {
+            Ok(views) => self.to_response(id, &ListRenderViewsResult { views }),
+            Err(error) => self.error_response(id, error),
+        }
+    }
+
+    fn handle_render_view(&mut self, id: u64, params: Value) -> ResponseEnvelope {
+        let params: RenderViewParams = match serde_json::from_value(params) {
+            Ok(params) => params,
+            Err(error) => {
+                return self.error_response(id, WorkerError::InvalidRequest(error.to_string()));
+            }
+        };
+        match self
+            .require_document()
+            .and_then(|document| document.render_view(params))
+        {
+            Ok(result) => self.to_response(id, &result),
+            Err(error) => self.error_response(id, error),
+        }
+    }
+
     fn require_document(&self) -> Result<&F::Document, WorkerError> {
         self.document.as_ref().ok_or(WorkerError::DocumentNotOpen)
     }
@@ -264,6 +292,7 @@ impl<F: BackendFactory> StdioHandler<F> {
             WorkerError::Unsupported(_) => "unsupported",
             WorkerError::BackendUnavailable(_) => "backend_unavailable",
             WorkerError::OpenFailed(_) => "open_failed",
+            WorkerError::ResourceLimit(_) => "resource_limit",
         };
 
         ResponseEnvelope {

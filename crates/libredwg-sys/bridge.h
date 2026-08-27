@@ -11,7 +11,8 @@ typedef enum BridgeDwgFieldKind {
   BRIDGE_DWG_FIELD_DOUBLE = 4,
   BRIDGE_DWG_FIELD_BOOL = 5,
   BRIDGE_DWG_FIELD_POINT2D = 6,
-  BRIDGE_DWG_FIELD_POINT3D = 7
+  BRIDGE_DWG_FIELD_POINT3D = 7,
+  BRIDGE_DWG_FIELD_TIME = 8
 } BridgeDwgFieldKind;
 
 typedef struct BridgeDwgFieldValue {
@@ -24,6 +25,9 @@ typedef struct BridgeDwgFieldValue {
   double point_x;
   double point_y;
   double point_z;
+  BITCODE_BL time_days;
+  BITCODE_BL time_ms;
+  double time_value;
 } BridgeDwgFieldValue;
 
 Dwg_Data *bridge_dwg_data_new(void);
@@ -41,6 +45,9 @@ bool bridge_dwg_object_read_field(const Dwg_Object *obj,
                                  BridgeDwgFieldValue *out);
 char *bridge_dwg_object_read_field_json(const Dwg_Object *obj,
                                         const char *fieldname);
+bool bridge_dwg_header_read_field(const Dwg_Data *dwg,
+                                  const char *fieldname,
+                                  BridgeDwgFieldValue *out);
 char *bridge_dwg_object_dictionary_items_json (const Dwg_Object *obj);
 char *bridge_dwg_object_dictionary_item_handles_json (const Dwg_Object *obj);
 char *bridge_dwg_object_xrecord_xdata_json (const Dwg_Object *obj);
@@ -48,5 +55,9 @@ char *bridge_dwg_object_block_connections_json (const Dwg_Object *obj);
 char *bridge_dwg_object_evaluation_graph_nodes_json (const Dwg_Object *obj);
 char *bridge_dwg_object_evaluation_graph_edges_json (const Dwg_Object *obj);
 char *bridge_dwg_object_hatch_contours_json (const Dwg_Object *obj);
+char *bridge_dwg_object_lwpolyline_geometry_json (const Dwg_Object *obj);
+char *bridge_dwg_object_spline_geometry_json (const Dwg_Object *obj);
+char *bridge_dwg_object_wipeout_geometry_json (const Dwg_Object *obj);
+char *bridge_dwg_object_proxy_table_json (const Dwg_Object *obj);
 void bridge_dwg_string_free (char *value);
 void bridge_dwg_field_value_free(BridgeDwgFieldValue *value);

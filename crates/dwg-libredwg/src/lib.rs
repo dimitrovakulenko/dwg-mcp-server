@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::Path;
+use std::sync::OnceLock;
 
+use dwg_render_core::{RenderDocument, RenderOutput, RenderRequest, RenderView, SourceEntity};
 use dwg_worker_core::{
     BackendFactory, DwgDocument, GetObjectsRequest, GetObjectsResult, IndexedDocument,
     IndexedObject, QueryObjectsRequest, QueryObjectsResult, TypeDefinition, WorkerError,
@@ -15,6 +17,8 @@ use schema::SchemaCatalog;
 pub use schema::{describe_supported_type, list_supported_types};
 
 const DWG_ERR_CRITICAL_STATUS: i32 = 128;
+const HEADER_OBJECT_HANDLE: &str = "HEADER";
+const HEADER_TYPE_NAME: &str = "HEADER";
 
 pub struct LibreDwgFactory;
 
@@ -40,6 +44,7 @@ impl BackendFactory for LibreDwgFactory {
 
 pub struct LibreDwgDocument {
     indexed: IndexedDocument,
+    render: OnceLock<RenderDocument>,
     #[cfg(feature = "native")]
     _native: NativeDocument,
 }
@@ -52,6 +57,7 @@ impl LibreDwgDocument {
             let indexed = build_indexed_document(&native)?;
             Ok(Self {
                 indexed,
+                render: OnceLock::new(),
                 _native: native,
             })
         }
@@ -84,6 +90,46 @@ impl DwgDocument for LibreDwgDocument {
         request: QueryObjectsRequest,
     ) -> Result<QueryObjectsResult, WorkerError> {
         self.indexed.query_objects(request)
+    }
+
+    fn list_render_views(&self) -> Result<Vec<RenderView>, WorkerError> {
+        self.render_document()
+            .list_views()
+            .map_err(worker_render_error)
+    }
+
+    fn render_view(&self, request: RenderRequest) -> Result<RenderOutput, WorkerError> {
+        self.render_document()
+            .render(request)
+            .map_err(worker_render_error)
+    }
+}
+
+fn worker_render_error(error: dwg_render_core::RenderError) -> WorkerError {
+    match error {
+        dwg_render_core::RenderError::ResourceLimit(message) => WorkerError::ResourceLimit(message),
+        error => WorkerError::InvalidRequest(error.to_string()),
+    }
+}
+
+impl LibreDwgDocument {
+    fn render_document(&self) -> &RenderDocument {
+        self.render.get_or_init(|| {
+            RenderDocument::new(
+                self.indexed
+                    .objects()
+                    .iter()
+                    .map(|object| SourceEntity {
+                        handle: object.handle.clone(),
+                        type_name: object.type_name.clone(),
+                        kind: object.kind.clone(),
+                        properties: object.full_properties.clone(),
+                        container_block_handle: object.container_block_handle.clone(),
+                        layout_handle: object.layout_handle.clone(),
+                    })
+                    .collect(),
+            )
+        })
     }
 }
 
@@ -134,7 +180,7 @@ impl Drop for NativeDocument {
 fn build_indexed_document(native: &NativeDocument) -> Result<IndexedDocument, WorkerError> {
     let schema = SchemaCatalog::load()?;
     let object_count = unsafe { libredwg_sys::bridge_dwg_data_num_objects(native.raw) } as usize;
-    let mut indexed_objects = Vec::with_capacity(object_count);
+    let mut indexed_objects = Vec::with_capacity(object_count + 1);
     let mut type_properties: HashMap<String, BTreeSet<String>> = HashMap::new();
 
     for index in 0..object_count {
@@ -146,6 +192,10 @@ fn build_indexed_document(native: &NativeDocument) -> Result<IndexedDocument, Wo
 
     augment_dynamic_block_history_properties(&mut indexed_objects);
     augment_polyline_vertex_properties(&mut indexed_objects);
+
+    if let Some(indexed) = unsafe { parse_header_variables(native.raw, schema)? } {
+        indexed_objects.push(indexed);
+    }
 
     for indexed in &indexed_objects {
         type_properties
@@ -166,7 +216,6 @@ fn build_indexed_document(native: &NativeDocument) -> Result<IndexedDocument, Wo
     Ok(IndexedDocument::new(types, indexed_objects))
 }
 
-#[cfg(feature = "native")]
 fn augment_dynamic_block_history_properties(objects: &mut [IndexedObject]) {
     let indices_by_handle = objects
         .iter()
@@ -398,6 +447,16 @@ unsafe fn parse_native_object(
 
     let mut full_properties = unsafe { read_properties_for_object(object, supported.as_ref()) };
     full_properties.extend(unsafe { read_special_properties(object, &raw_type_name) });
+    if type_name == "AcDbWipeout" {
+        if let Some(Value::Object(value)) = unsafe {
+            read_json_property(
+                object,
+                libredwg_sys::bridge_dwg_object_wipeout_geometry_json,
+            )
+        } {
+            full_properties.extend(value);
+        }
+    }
     let summary_properties = select_summary_properties(&full_properties);
 
     Ok(Some(IndexedObject {
@@ -411,6 +470,56 @@ unsafe fn parse_native_object(
         layout_handle: None,
         space: None,
     }))
+}
+
+#[cfg(feature = "native")]
+unsafe fn parse_header_variables(
+    dwg: *mut libredwg_sys::Dwg_Data,
+    schema: &SchemaCatalog,
+) -> Result<Option<IndexedObject>, WorkerError> {
+    let Some(supported) = schema.describe_type(HEADER_TYPE_NAME) else {
+        return Err(WorkerError::BackendUnavailable(
+            "HEADER type definition is missing from the schema catalog".to_owned(),
+        ));
+    };
+
+    let full_properties = unsafe { read_header_properties(dwg, &supported) };
+    if full_properties.is_empty() {
+        return Ok(None);
+    }
+
+    let summary_properties = select_summary_properties(&full_properties);
+    Ok(Some(IndexedObject {
+        handle: HEADER_OBJECT_HANDLE.to_owned(),
+        kind: "header".to_owned(),
+        type_name: HEADER_TYPE_NAME.to_owned(),
+        generic_type: supported.generic_type,
+        summary_properties,
+        full_properties,
+        container_block_handle: None,
+        layout_handle: None,
+        space: None,
+    }))
+}
+
+#[cfg(feature = "native")]
+unsafe fn read_header_properties(
+    dwg: *mut libredwg_sys::Dwg_Data,
+    supported: &TypeDefinition,
+) -> BTreeMap<String, Value> {
+    let mut properties = BTreeMap::new();
+
+    for property in &supported.properties {
+        if !property.queryable {
+            continue;
+        }
+
+        if let Some(value) = unsafe { read_header_field_value(dwg, &property.name) } {
+            properties.insert(property.name.clone(), value);
+        }
+    }
+
+    properties
 }
 
 #[cfg(feature = "native")]
@@ -505,6 +614,30 @@ unsafe fn read_special_properties(
                 properties.insert("contours".to_owned(), value);
             }
         }
+        "LWPOLYLINE" => {
+            if let Some(Value::Object(value)) = unsafe {
+                read_json_property(
+                    object,
+                    libredwg_sys::bridge_dwg_object_lwpolyline_geometry_json,
+                )
+            } {
+                properties.extend(value);
+            }
+        }
+        "SPLINE" => {
+            if let Some(Value::Object(value)) = unsafe {
+                read_json_property(object, libredwg_sys::bridge_dwg_object_spline_geometry_json)
+            } {
+                properties.extend(value);
+            }
+        }
+        "TABLE" => {
+            if let Some(Value::Object(value)) = unsafe {
+                read_json_property(object, libredwg_sys::bridge_dwg_object_proxy_table_json)
+            } {
+                properties.extend(value);
+            }
+        }
         _ => {}
     }
 
@@ -544,6 +677,28 @@ unsafe fn read_field_value(
         libredwg_sys::bridge_dwg_string_free(raw);
     }
     serde_json::from_str(&text).ok()
+}
+
+#[cfg(feature = "native")]
+unsafe fn read_header_field_value(
+    dwg: *mut libredwg_sys::Dwg_Data,
+    field_name: &str,
+) -> Option<Value> {
+    let c_field = CString::new(field_name).ok()?;
+    let mut raw = std::mem::MaybeUninit::<libredwg_sys::BridgeDwgFieldValue>::zeroed();
+    let ok = unsafe {
+        libredwg_sys::bridge_dwg_header_read_field(dwg, c_field.as_ptr(), raw.as_mut_ptr())
+    };
+    if !ok {
+        return None;
+    }
+
+    let mut raw = unsafe { raw.assume_init() };
+    let value = bridge_field_value_to_json(&raw);
+    unsafe {
+        libredwg_sys::bridge_dwg_field_value_free(&mut raw);
+    }
+    value
 }
 
 #[cfg(feature = "native")]
@@ -591,6 +746,11 @@ fn bridge_field_value_to_json(value: &libredwg_sys::BridgeDwgFieldValue) -> Opti
         x if x == libredwg_sys::BridgeDwgFieldKind_BRIDGE_DWG_FIELD_POINT3D as i32 => {
             Some(json!([value.point_x, value.point_y, value.point_z]))
         }
+        x if x == libredwg_sys::BridgeDwgFieldKind_BRIDGE_DWG_FIELD_TIME as i32 => Some(json!({
+            "days": value.time_days,
+            "milliseconds": value.time_ms,
+            "value": value.time_value,
+        })),
         _ => None,
     }
 }
@@ -601,6 +761,16 @@ fn select_summary_properties(properties: &BTreeMap<String, Value>) -> BTreeMap<S
         "tag",
         "text",
         "text_value",
+        "ACADVER",
+        "DWGCODEPAGE",
+        "MEASUREMENT",
+        "INSUNITS",
+        "LUNITS",
+        "HANDSEED",
+        "CLAYER",
+        "num_rows",
+        "num_cols",
+        "cell_texts",
         "layer",
         "ownerhandle",
         "xdicobjhandle",

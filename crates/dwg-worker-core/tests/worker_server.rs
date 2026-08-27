@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use dwg_worker_core::{
     BackendFactory, DwgDocument, GetObjectsRequest, IndexedDocument, IndexedObject, Projection,
     PropertyDefinition, PropertyFilter, QueryMode, QueryObjectsRequest, QueryScope, QuerySpace,
-    RelationDirection, RelationFilter, SortDirection, SortSpec, TypeDefinition, WorkerError,
-    StdioHandler,
+    RelationDirection, RelationFilter, SortDirection, SortSpec, StdioHandler, TypeDefinition,
+    WorkerError,
 };
 use serde_json::{Value, json};
 
@@ -341,7 +341,11 @@ fn full_projection_suppresses_coordinate_arrays_unless_selected() {
         })
         .expect("full projection should work");
     assert!(!full_without_select.items.is_empty());
-    assert!(!full_without_select.items[0].properties.contains_key("points"));
+    assert!(
+        !full_without_select.items[0]
+            .properties
+            .contains_key("points")
+    );
 
     let full_with_select = document
         .get_objects(GetObjectsRequest {
@@ -363,17 +367,19 @@ fn list_types_supports_regex_and_pagination() {
     };
     let mut handler = StdioHandler::new(factory);
 
-    let first_page = serde_json::to_value(handler.handle_request(
-        serde_json::from_value(json!({
-            "id": 1,
-            "method": "listTypes",
-            "params": {
-                "regex": "(?i)block",
-                "limit": 1
-            }
-        }))
-        .expect("request"),
-    ))
+    let first_page = serde_json::to_value(
+        handler.handle_request(
+            serde_json::from_value(json!({
+                "id": 1,
+                "method": "listTypes",
+                "params": {
+                    "regex": "(?i)block",
+                    "limit": 1
+                }
+            }))
+            .expect("request"),
+        ),
+    )
     .expect("json");
     assert_eq!(first_page["result"]["total"], json!(2));
     assert_eq!(first_page["result"]["nextCursor"], json!("1"));
@@ -382,22 +388,27 @@ fn list_types_supports_regex_and_pagination() {
         json!("AcDbBlockReference")
     );
 
-    let second_page = serde_json::to_value(handler.handle_request(
-        serde_json::from_value(json!({
-            "id": 2,
-            "method": "listTypes",
-            "params": {
-                "regex": "(?i)block",
-                "limit": 1,
-                "cursor": "1"
-            }
-        }))
-        .expect("request"),
-    ))
+    let second_page = serde_json::to_value(
+        handler.handle_request(
+            serde_json::from_value(json!({
+                "id": 2,
+                "method": "listTypes",
+                "params": {
+                    "regex": "(?i)block",
+                    "limit": 1,
+                    "cursor": "1"
+                }
+            }))
+            .expect("request"),
+        ),
+    )
     .expect("json");
     assert_eq!(second_page["result"]["total"], json!(2));
     assert_eq!(second_page["result"]["nextCursor"], Value::Null);
-    assert_eq!(second_page["result"]["items"][0]["typeName"], json!("BLOCK_HEADER"));
+    assert_eq!(
+        second_page["result"]["items"][0]["typeName"],
+        json!("BLOCK_HEADER")
+    );
 }
 
 #[test]
