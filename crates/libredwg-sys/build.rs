@@ -29,7 +29,9 @@ fn main() {
     } else {
         println!("cargo:rustc-link-lib=redwg");
     }
-    println!("cargo:rustc-link-lib=m");
+    if env::var("CARGO_CFG_TARGET_FAMILY").as_deref() != Ok("windows") {
+        println!("cargo:rustc-link-lib=m");
+    }
 
     compile_bridge(&linkage);
     generate_bindings(&linkage);
@@ -91,6 +93,41 @@ fn discover_vendored() -> Linkage {
 
 fn compile_bridge(linkage: &Linkage) {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must exist"));
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        let object_path = out_dir.join("bridge.obj");
+        let archive_path = out_dir.join("dwg_bridge.lib");
+        let mut compile = Command::new("clang-cl");
+        compile
+            .arg("/nologo")
+            .arg("/c")
+            .arg(Path::new("bridge.c"))
+            .arg(format!("/Fo{}", object_path.display()))
+            .arg("/MD")
+            .arg("/std:c11");
+
+        for include_dir in &linkage.include_dirs {
+            compile.arg(format!("/I{}", include_dir.display()));
+        }
+
+        let status = compile
+            .status()
+            .expect("failed to execute clang-cl for bridge.c");
+        if !status.success() {
+            panic!("failed to compile bridge.c");
+        }
+
+        let status = Command::new("llvm-lib")
+            .arg("/nologo")
+            .arg(format!("/OUT:{}", archive_path.display()))
+            .arg(&object_path)
+            .status()
+            .expect("failed to execute llvm-lib for bridge archive");
+        if !status.success() {
+            panic!("failed to archive bridge.obj");
+        }
+        return;
+    }
+
     let object_path = out_dir.join("bridge.o");
     let archive_path = out_dir.join("libdwg_bridge.a");
 
