@@ -8,8 +8,8 @@ there.
 
 ## Project Snapshot
 
-DWG MCP Server is a read-only Model Context Protocol server that gives AI agents
-access to DWG files. The Python host exposes MCP tools, validates file access, and
+DWG MCP Server is a read-only Model Context Protocol server for inspecting
+AutoCAD DWG files. The Python host exposes MCP tools, validates file access, and
 starts one Rust `dwg-worker` process per opened drawing. The Rust side indexes
 DWG content through LibreDWG and answers object and query requests over a JSON
 line protocol.
