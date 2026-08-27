@@ -3,7 +3,7 @@
   "name": "io.github.dimitrovakulenko/dwg-mcp-server",
   "title": "DWG MCP Server",
   "description": "Read-only MCP server for inspecting AutoCAD DWG files",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "websiteUrl": "https://github.com/dimitrovakulenko/dwg-mcp-server",
   "repository": {
     "url": "https://github.com/dimitrovakulenko/dwg-mcp-server",
@@ -14,7 +14,7 @@
     {
       "registryType": "npm",
       "identifier": "@dmytro-prototypes/dwg-mcp-server",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "transport": {
         "type": "stdio"
       },
