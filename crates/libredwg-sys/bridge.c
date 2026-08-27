@@ -9,6 +9,11 @@
 #include <stdarg.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <decode.h>
+#include <windows.h>
+#endif
+
 Dwg_Data *
 bridge_dwg_data_new(void)
 {
@@ -29,7 +34,50 @@ bridge_dwg_data_read_file(Dwg_Data *dwg, const char *filename)
       && tolower ((unsigned char)filename[length - 2]) == 'x'
       && tolower ((unsigned char)filename[length - 1]) == 'f')
     return dxf_read_file(filename, dwg);
+#ifdef _WIN32
+  {
+    Bit_Chain bit_chain = { 0 };
+    wchar_t *wide_filename;
+    FILE *fp;
+    int error;
+    int opts = dwg->opts & DWG_OPTS_LOGLEVEL;
+    int wide_length = MultiByteToWideChar (CP_UTF8, MB_ERR_INVALID_CHARS,
+                                           filename, -1, NULL, 0);
+
+    if (wide_length <= 0)
+      return DWG_ERR_IOERROR;
+    wide_filename = (wchar_t *)calloc ((size_t)wide_length, sizeof (wchar_t));
+    if (!wide_filename)
+      return DWG_ERR_OUTOFMEM;
+    if (!MultiByteToWideChar (CP_UTF8, MB_ERR_INVALID_CHARS, filename, -1,
+                              wide_filename, wide_length))
+      {
+        free (wide_filename);
+        return DWG_ERR_IOERROR;
+      }
+
+    fp = _wfopen (wide_filename, L"rb");
+    free (wide_filename);
+    if (!fp)
+      return DWG_ERR_IOERROR;
+
+    memset (dwg, 0, sizeof (Dwg_Data));
+    dwg->opts = opts;
+    error = dat_read_stream (&bit_chain, fp);
+    fclose (fp);
+    if (error >= DWG_ERR_CRITICAL)
+      {
+        free (bit_chain.chain);
+        return error;
+      }
+
+    error = dwg_decode (&bit_chain, dwg);
+    free (bit_chain.chain);
+    return error;
+  }
+#else
   return dwg_read_file(filename, dwg);
+#endif
 }
 
 BITCODE_BL

@@ -27,6 +27,21 @@ fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testData/house_plan.dwg")
 }
 
+#[cfg(windows)]
+#[test]
+fn opens_dwg_from_unicode_path_on_windows() {
+    let _guard = lock_libredwg();
+    let unicode_path =
+        std::env::temp_dir().join(format!("dwg-mcp-server-{}-чертёж.dwg", std::process::id()));
+    std::fs::copy(fixture_path(), &unicode_path).expect("fixture should copy");
+
+    let open_result = LibreDwgFactory.open(&unicode_path);
+    let remove_result = std::fs::remove_file(&unicode_path);
+
+    open_result.expect("fixture at a Unicode path should open");
+    remove_result.expect("temporary fixture should be removed");
+}
+
 fn dyn_blocks_fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testData/dyn-blocks.dwg")
 }
