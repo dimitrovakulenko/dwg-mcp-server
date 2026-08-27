@@ -9,15 +9,58 @@
 #include <stdarg.h>
 #include <string.h>
 
+typedef struct BridgeDwgData
+{
+  Dwg_Data dwg;
+  Dwg_Object_Ref **sorted_object_refs;
+  BITCODE_BL num_sorted_object_refs;
+} BridgeDwgData;
+
+static int
+bridge_compare_object_ref_ptrs (const void *left, const void *right)
+{
+  const uintptr_t left_value
+      = (uintptr_t)*(Dwg_Object_Ref *const *)left;
+  const uintptr_t right_value
+      = (uintptr_t)*(Dwg_Object_Ref *const *)right;
+  return (left_value > right_value) - (left_value < right_value);
+}
+
+static void
+bridge_index_object_refs (Dwg_Data *dwg)
+{
+  BridgeDwgData *data = (BridgeDwgData *)dwg;
+
+  free (data->sorted_object_refs);
+  data->sorted_object_refs = NULL;
+  data->num_sorted_object_refs = 0;
+  if (!dwg->object_ref || !dwg->num_object_refs
+      || dwg->num_object_refs > SIZE_MAX / sizeof (*data->sorted_object_refs))
+    return;
+
+  data->sorted_object_refs
+      = (Dwg_Object_Ref **)malloc (dwg->num_object_refs
+                                  * sizeof (*data->sorted_object_refs));
+  if (!data->sorted_object_refs)
+    return;
+  memcpy (data->sorted_object_refs, dwg->object_ref,
+          dwg->num_object_refs * sizeof (*data->sorted_object_refs));
+  data->num_sorted_object_refs = dwg->num_object_refs;
+  qsort (data->sorted_object_refs, data->num_sorted_object_refs,
+         sizeof (*data->sorted_object_refs), bridge_compare_object_ref_ptrs);
+}
+
 Dwg_Data *
 bridge_dwg_data_new(void)
 {
-  return (Dwg_Data *)calloc(1, sizeof(Dwg_Data));
+  BridgeDwgData *data = (BridgeDwgData *)calloc (1, sizeof (BridgeDwgData));
+  return data ? &data->dwg : NULL;
 }
 
 int
 bridge_dwg_data_read_file(Dwg_Data *dwg, const char *filename)
 {
+  int status;
   size_t length;
 
   if (!dwg || !filename)
@@ -28,8 +71,12 @@ bridge_dwg_data_read_file(Dwg_Data *dwg, const char *filename)
       && tolower ((unsigned char)filename[length - 3]) == 'd'
       && tolower ((unsigned char)filename[length - 2]) == 'x'
       && tolower ((unsigned char)filename[length - 1]) == 'f')
-    return dxf_read_file(filename, dwg);
-  return dwg_read_file(filename, dwg);
+    status = dxf_read_file(filename, dwg);
+  else
+    status = dwg_read_file(filename, dwg);
+  if (status < DWG_ERR_CRITICAL)
+    bridge_index_object_refs (dwg);
+  return status;
 }
 
 BITCODE_BL
@@ -41,10 +88,14 @@ bridge_dwg_data_num_objects(const Dwg_Data *dwg)
 void
 bridge_dwg_data_free(Dwg_Data *dwg)
 {
+  BridgeDwgData *data;
+
   if (!dwg)
     return;
+  data = (BridgeDwgData *)dwg;
+  free (data->sorted_object_refs);
   dwg_free(dwg);
-  free(dwg);
+  free(data);
 }
 
 const Dwg_Object *
@@ -497,10 +548,18 @@ bridge_type_matches(const char *type, const char *candidate)
 static bool
 bridge_handle_ref_is_known(const Dwg_Data *dwg, BITCODE_H ref)
 {
+  const BridgeDwgData *data = (const BridgeDwgData *)dwg;
   BITCODE_BL index;
 
   if (!dwg || !dwg->object_ref || !ref)
     return false;
+
+  if (data->sorted_object_refs)
+    return bsearch (&ref, data->sorted_object_refs,
+                    data->num_sorted_object_refs,
+                    sizeof (*data->sorted_object_refs),
+                    bridge_compare_object_ref_ptrs)
+           != NULL;
 
   for (index = 0; index < dwg->num_object_refs; index++)
     {
