@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -19,6 +19,10 @@ export function nativeTarget(platform = process.platform, arch = process.arch) {
   const target = targets[`${platform}-${arch}`]
   if (!target) throw new Error(`Unsupported platform: ${platform} ${arch}`)
   return target
+}
+
+export function isMain(entry = process.argv[1]) {
+  return Boolean(entry) && existsSync(entry) && realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url))
 }
 
 async function download(url, destination) {
@@ -70,7 +74,7 @@ export async function main() {
   process.exit(result.status ?? 1)
 }
 
-if (path.resolve(process.argv[1] || "") === fileURLToPath(import.meta.url)) {
+if (isMain()) {
   main().catch(error => {
     console.error(error.message)
     process.exit(1)

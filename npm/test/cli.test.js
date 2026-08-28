@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
+import { fileURLToPath } from "node:url"
 
-import { nativeTarget } from "../bin/cli.js"
+import { isMain, nativeTarget } from "../bin/cli.js"
 
 test("maps supported native targets", () => {
   assert.equal(nativeTarget("darwin", "arm64"), "aarch64-apple-darwin")
@@ -12,4 +16,15 @@ test("maps supported native targets", () => {
 
 test("rejects unsupported native targets", () => {
   assert.throws(() => nativeTarget("darwin", "x64"), /Unsupported platform/)
+})
+
+test("recognizes npm bin symlink as the main script", { skip: process.platform === "win32" }, () => {
+  const temporaryDir = mkdtempSync(path.join(os.tmpdir(), "dwg-mcp-cli-"))
+  const symlink = path.join(temporaryDir, "dwg-mcp-server")
+  try {
+    symlinkSync(fileURLToPath(new URL("../bin/cli.js", import.meta.url)), symlink)
+    assert.equal(isMain(symlink), true)
+  } finally {
+    rmSync(temporaryDir, { recursive: true, force: true })
+  }
 })

@@ -51,7 +51,7 @@ class DwgMcpApplication:
 
         self.server = Server(
             "dwg-mcp-server",
-            version="0.2.0",
+            version="0.2.1",
             instructions=SERVER_INSTRUCTIONS,
             lifespan=lifespan,
         )
