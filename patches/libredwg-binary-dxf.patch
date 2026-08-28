@@ -1,0 +1,57 @@
+diff --git a/src/in_dxf.c b/src/in_dxf.c
+index e259c16f..ba7a7f5d 100644
+--- a/src/in_dxf.c
++++ b/src/in_dxf.c
+@@ -79,6 +79,7 @@ dwg_find_tablehandle_silent (Dwg_Data *restrict dwg, const char *restrict name,
+ 
+ /* the current version per spec block */
+ static unsigned int cur_ver = 0;
++static unsigned char dxfb_group_code_width = 2;
+ static char buf[4096];
+ static long start, end; // stream offsets
+ static array_hdls *header_hdls = NULL;
+@@ -862,7 +863,7 @@ dxf_read_pair (Bit_Chain *dat)
+   if (is_binary)
+     LOG_HANDLE ("%4zx: ", dat->byte);
+   // pre-R14 binary DXF uses 1-byte group codes (0xFF prefix for codes >= 255)
+-  if (is_binary && dat->version < R_14)
++  if (is_binary && dxfb_group_code_width == 1)
+     {
+       BITCODE_RC c = bit_read_RC (dat);
+       if (c == 0xff)
+@@ -15076,9 +15077,15 @@ dwg_read_dxf (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
+           // After sentinel, code 0 for SECTION: pre-R14 has 0x00 'S',
+           // R14+ has 0x00 0x00 'S'
+           if (dat->size > 23 && dat->chain[23] != 0)
+-            dat->version = R_13;
++            {
++              dat->version = R_13;
++              dxfb_group_code_width = 1;
++            }
+           else
+-            dat->version = R_14;
++            {
++              dat->version = R_14;
++              dxfb_group_code_width = 2;
++            }
+         }
+     }
+   if (dat->size < 256)
+@@ -15358,9 +15365,15 @@ dwg_read_dxfb (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
+       // After sentinel, code 0 for SECTION: pre-R14 has 0x00 'S',
+       // R14+ has 0x00 0x00 'S'
+       if (dat->size > 23 && dat->chain[23] != 0)
+-        dat->version = R_13;
++        {
++          dat->version = R_13;
++          dxfb_group_code_width = 1;
++        }
+       else
+-        dat->version = R_14;
++        {
++          dat->version = R_14;
++          dxfb_group_code_width = 2;
++        }
+     }
+   return dwg_read_dxf (dat, dwg);
+ }

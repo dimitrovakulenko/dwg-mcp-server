@@ -21,6 +21,35 @@ const DWG_ERR_CRITICAL_STATUS: i32 = 128;
 const HEADER_OBJECT_HANDLE: &str = "HEADER";
 const HEADER_TYPE_NAME: &str = "HEADER";
 
+#[cfg(feature = "native")]
+fn libredwg_error_names(status: i32) -> String {
+    const ERRORS: &[(i32, &str)] = &[
+        (1, "DWG_ERR_WRONGCRC"),
+        (2, "DWG_ERR_NOTYETSUPPORTED"),
+        (4, "DWG_ERR_UNHANDLEDCLASS"),
+        (8, "DWG_ERR_INVALIDTYPE"),
+        (16, "DWG_ERR_INVALIDHANDLE"),
+        (32, "DWG_ERR_INVALIDEED"),
+        (64, "DWG_ERR_VALUEOUTOFBOUNDS"),
+        (128, "DWG_ERR_CLASSESNOTFOUND"),
+        (256, "DWG_ERR_SECTIONNOTFOUND"),
+        (512, "DWG_ERR_PAGENOTFOUND"),
+        (1024, "DWG_ERR_INTERNALERROR"),
+        (2048, "DWG_ERR_INVALIDDWG"),
+        (4096, "DWG_ERR_IOERROR"),
+        (8192, "DWG_ERR_OUTOFMEM"),
+    ];
+    let names = ERRORS
+        .iter()
+        .filter_map(|(bit, name)| (status & bit != 0).then_some(*name))
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        "DWG_ERR_UNKNOWN".to_owned()
+    } else {
+        names.join(" | ")
+    }
+}
+
 pub struct LibreDwgFactory;
 
 impl BackendFactory for LibreDwgFactory {
@@ -328,7 +357,8 @@ impl NativeDocument {
                 libredwg_sys::bridge_dwg_data_free(raw);
             }
             return Err(WorkerError::OpenFailed(format!(
-                "libredwg returned error code {status} while opening {}",
+                "libredwg returned {} ({status}) while opening {}",
+                libredwg_error_names(status),
                 path.display()
             )));
         }
@@ -1032,7 +1062,7 @@ fn property_handle_array(object: &IndexedObject, property: &str) -> Vec<String> 
 
 #[cfg(all(test, feature = "native"))]
 mod tests {
-    use super::augment_polyline_vertex_properties;
+    use super::{augment_polyline_vertex_properties, libredwg_error_names};
     use dwg_worker_core::IndexedObject;
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
@@ -1097,6 +1127,15 @@ mod tests {
         assert_eq!(
             polyline.full_properties.get("vertices"),
             Some(&json!([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
+        );
+    }
+
+    #[test]
+    fn libredwg_error_names_are_symbolic() {
+        assert_eq!(libredwg_error_names(2048), "DWG_ERR_INVALIDDWG");
+        assert_eq!(
+            libredwg_error_names(4096 | 8192),
+            "DWG_ERR_IOERROR | DWG_ERR_OUTOFMEM"
         );
     }
 }

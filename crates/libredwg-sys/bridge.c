@@ -183,6 +183,17 @@ bridge_dwg_insert_set_transform(Dwg_Data *dwg, BITCODE_RLL handle_value,
 const char *
 bridge_dwg_object_name(const Dwg_Object *obj)
 {
+  if (obj && obj->name && obj->parent && obj->parent->dwg_class
+      && obj->type >= 500
+      && strcmp (obj->name, "UNKNOWN_ENT") == 0)
+    {
+      const int class_index = obj->type - 500;
+      if (class_index < obj->parent->num_classes
+          && obj->parent->dwg_class[class_index].dxfname
+          && strcmp (obj->parent->dwg_class[class_index].dxfname,
+                     "ACAD_TABLE") == 0)
+        return "TABLE";
+    }
   return obj ? obj->name : NULL;
 }
 
@@ -1517,7 +1528,8 @@ bridge_dwg_object_proxy_table_json (const Dwg_Object *obj)
   int *text_cols = NULL;
   BridgeJsonBuffer buffer = { 0 };
 
-  if (!obj || !obj->name || strcmp (obj->name, "TABLE") != 0
+  if (!obj || !obj->name
+      || strcmp (bridge_dwg_object_name (obj), "TABLE") != 0
       || obj->supertype != DWG_SUPERTYPE_ENTITY || !obj->tio.entity
       || obj->fixedtype != DWG_TYPE_UNKNOWN_ENT)
     return NULL;

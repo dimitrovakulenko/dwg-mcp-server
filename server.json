@@ -3,7 +3,7 @@
   "name": "io.github.dimitrovakulenko/dwg-mcp-server",
   "title": "DWG MCP Server",
   "description": "DWG file format access for AI via MCP. Connect DWG files to Claude, ChatGPT, Codex, Cursor, and other AI clients.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "websiteUrl": "https://github.com/dimitrovakulenko/dwg-mcp-server",
   "repository": {
     "url": "https://github.com/dimitrovakulenko/dwg-mcp-server",
@@ -14,7 +14,7 @@
     {
       "registryType": "npm",
       "identifier": "@dmytro-prototypes/dwg-mcp-server",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "transport": {
         "type": "stdio"
       },

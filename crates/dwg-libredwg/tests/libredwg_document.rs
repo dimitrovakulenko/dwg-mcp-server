@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -38,6 +39,61 @@ fn table_fixture_path() -> PathBuf {
 
 fn dxf_fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testData/render-smoke.dxf")
+}
+
+fn push_binary_group_code(bytes: &mut Vec<u8>, width: u8, code: u16) {
+    if width == 1 && code < 255 {
+        bytes.push(code as u8);
+    } else if width == 1 {
+        bytes.push(0xff);
+        bytes.extend_from_slice(&code.to_le_bytes());
+    } else {
+        bytes.extend_from_slice(&code.to_le_bytes());
+    }
+}
+
+fn push_binary_string(bytes: &mut Vec<u8>, width: u8, code: u16, value: &str) {
+    push_binary_group_code(bytes, width, code);
+    bytes.extend_from_slice(value.as_bytes());
+    bytes.push(0);
+}
+
+fn push_binary_i16(bytes: &mut Vec<u8>, width: u8, code: u16, value: i16) {
+    push_binary_group_code(bytes, width, code);
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_binary_f64(bytes: &mut Vec<u8>, width: u8, code: u16, value: f64) {
+    push_binary_group_code(bytes, width, code);
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn binary_dxf(version: &str, group_code_width: u8) -> Vec<u8> {
+    let mut bytes = b"AutoCAD Binary DXF\r\n\x1a\0".to_vec();
+    push_binary_string(&mut bytes, group_code_width, 0, "SECTION");
+    push_binary_string(&mut bytes, group_code_width, 2, "HEADER");
+    push_binary_string(&mut bytes, group_code_width, 9, "$ACADVER");
+    push_binary_string(&mut bytes, group_code_width, 1, version);
+    if group_code_width == 2 {
+        push_binary_string(&mut bytes, group_code_width, 9, "$ENDCAPS");
+        push_binary_i16(&mut bytes, group_code_width, 280, 0);
+    }
+    push_binary_string(&mut bytes, group_code_width, 0, "ENDSEC");
+    push_binary_string(&mut bytes, group_code_width, 0, "SECTION");
+    push_binary_string(&mut bytes, group_code_width, 2, "ENTITIES");
+    for offset in [0.0, 1.0, 2.0] {
+        push_binary_string(&mut bytes, group_code_width, 0, "LINE");
+        push_binary_string(&mut bytes, group_code_width, 8, "0");
+        push_binary_f64(&mut bytes, group_code_width, 10, offset);
+        push_binary_f64(&mut bytes, group_code_width, 20, 0.0);
+        push_binary_f64(&mut bytes, group_code_width, 30, 0.0);
+        push_binary_f64(&mut bytes, group_code_width, 11, offset + 1.0);
+        push_binary_f64(&mut bytes, group_code_width, 21, 1.0);
+        push_binary_f64(&mut bytes, group_code_width, 31, 0.0);
+    }
+    push_binary_string(&mut bytes, group_code_width, 0, "ENDSEC");
+    push_binary_string(&mut bytes, group_code_width, 0, "EOF");
+    bytes
 }
 
 fn contains_2d_point(value: &serde_json::Value) -> bool {
@@ -295,6 +351,44 @@ fn sample_dxf_opens_and_renders_model_svg() {
         .expect("SVG should be base64 encoded");
     assert!(svg.starts_with(b"<svg"));
     assert!(output.diagnostics.rendered_entities > 0);
+}
+
+#[test]
+fn binary_dxf_group_code_layouts_open_and_query() {
+    let _guard = lock_libredwg();
+
+    for (name, version, group_code_width) in [
+        ("r12", "AC1009", 1),
+        ("r13", "AC1012", 2),
+        ("r14", "AC1014", 2),
+        ("r2000", "AC1015", 2),
+    ] {
+        let path = std::env::temp_dir().join(format!(
+            "dwg-mcp-binary-dxf-{name}-{}.dxf",
+            std::process::id()
+        ));
+        fs::write(&path, binary_dxf(version, group_code_width))
+            .expect("binary DXF fixture should be written");
+        let result = LibreDwgFactory.open(&path);
+        fs::remove_file(&path).expect("binary DXF fixture should be removed");
+        let document = result.unwrap_or_else(|error| panic!("{name} binary DXF: {error}"));
+        let lines = document
+            .query_objects(QueryObjectsRequest {
+                type_name: Some("AcDbLine".to_owned()),
+                generic_type: None,
+                where_clauses: Vec::new(),
+                scope: None,
+                relations: Vec::new(),
+                sort: Vec::new(),
+                mode: QueryMode::Full,
+                projection: Projection::Full,
+                select: None,
+                limit: 10,
+                cursor: None,
+            })
+            .unwrap_or_else(|error| panic!("{name} binary DXF query: {error}"));
+        assert_eq!(lines.total, 3, "{name} binary DXF line count");
+    }
 }
 
 #[test]
