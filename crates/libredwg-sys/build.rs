@@ -33,6 +33,9 @@ fn main() {
     if env::var("CARGO_CFG_TARGET_FAMILY").as_deref() == Ok("unix") {
         println!("cargo:rustc-link-lib=m");
     }
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-lib=iconv");
+    }
 
     compile_bridge(&linkage);
     generate_bindings(&linkage);
