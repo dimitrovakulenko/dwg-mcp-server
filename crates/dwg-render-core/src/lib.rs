@@ -66,7 +66,14 @@ impl Bounds {
             min: [self.min[0].max(other.min[0]), self.min[1].max(other.min[1])],
             max: [self.max[0].min(other.max[0]), self.max[1].min(other.max[1])],
         };
-        intersection.valid().then_some(intersection)
+        (intersection
+            .min
+            .iter()
+            .chain(intersection.max.iter())
+            .all(|v| v.is_finite())
+            && intersection.min[0] <= intersection.max[0]
+            && intersection.min[1] <= intersection.max[1])
+            .then_some(intersection)
     }
 
     fn valid(self) -> bool {
@@ -292,6 +299,11 @@ impl Matrix {
 
 #[derive(Clone, Debug)]
 enum Graphic {
+    Point {
+        point: Point2,
+        mode: i64,
+        size: f64,
+    },
     Path {
         data: String,
         fill: bool,
@@ -337,6 +349,9 @@ pub struct RenderDocument {
     viewports: HashMap<String, Viewport>,
     model_block: Option<String>,
     model_extents: Option<Bounds>,
+    point_mode: i64,
+    point_size: f64,
+    defpoints_layers: HashSet<String>,
 }
 
 impl RenderDocument {
@@ -348,6 +363,9 @@ impl RenderDocument {
         let mut paper_viewports = HashMap::<String, String>::new();
         let mut model_block = None;
         let mut model_extents = None;
+        let mut point_mode = 0;
+        let mut point_size = 0.0;
+        let mut defpoints_layers = HashSet::new();
 
         for (index, entity) in entities.iter().enumerate() {
             if let Some(block) = &entity.container_block_handle {
@@ -355,6 +373,11 @@ impl RenderDocument {
             }
             match entity.type_name.as_str() {
                 "AcDbLayerTableRecord" => {
+                    if string(&entity.properties, "name")
+                        .is_some_and(|name| name.eq_ignore_ascii_case("Defpoints"))
+                    {
+                        defpoints_layers.insert(entity.handle.clone());
+                    }
                     if let Some(color) = number(&entity.properties, "color") {
                         layers.insert(entity.handle.clone(), aci_color(color as i64, false));
                     }
@@ -375,6 +398,8 @@ impl RenderDocument {
                     model_block = string(&entity.properties, "model_space").map(str::to_owned);
                 }
                 "HEADER" => {
+                    point_mode = number(&entity.properties, "PDMODE").unwrap_or(0.0) as i64;
+                    point_size = number(&entity.properties, "PDSIZE").unwrap_or(0.0);
                     let min = point(&entity.properties, "EXTMIN");
                     let max = point(&entity.properties, "EXTMAX");
                     model_extents = min.zip(max).and_then(|(min, max)| {
@@ -452,6 +477,9 @@ impl RenderDocument {
             viewports,
             model_block,
             model_extents,
+            point_mode,
+            point_size,
+            defpoints_layers,
         }
     }
 
@@ -544,8 +572,9 @@ impl RenderDocument {
             RenderTarget::Model => {
                 let items =
                     self.model_items(Matrix::IDENTITY, None, request.region, &mut diagnostics)?;
-                let bounds =
-                    automatic_bounds(&items, &mut diagnostics).ok_or(RenderError::EmptyTarget)?;
+                let bounds = automatic_bounds(&items, &mut diagnostics)
+                    .or(request.region)
+                    .ok_or(RenderError::EmptyTarget)?;
                 (items, bounds)
             }
             RenderTarget::Layout { layout_handle } => {
@@ -759,9 +788,23 @@ impl RenderDocument {
                 }
                 continue;
             }
-            match display_item(entity, transform, clip, &self.layers) {
+            let defpoint = string(&entity.properties, "layer").is_some_and(|layer| {
+                self.defpoints_layers.contains(layer) || layer.eq_ignore_ascii_case("Defpoints")
+            });
+            let point_mode = if defpoint { 0 } else { self.point_mode };
+            if entity.type_name == "AcDbPoint" && point_mode == 1 {
+                continue;
+            }
+            match display_item(
+                entity,
+                transform,
+                clip,
+                &self.layers,
+                point_mode,
+                self.point_size,
+            ) {
                 Some(item) => {
-                    let Some(effective_bounds) = item_effective_bounds(&item) else {
+                    let Some(effective_bounds) = item_visible_bounds(&item, cull_region) else {
                         continue;
                     };
                     if cull_region.is_some_and(|region| !effective_bounds.intersects(region)) {
@@ -872,6 +915,8 @@ fn display_item(
     transform: Matrix,
     clip: Option<Bounds>,
     layers: &HashMap<String, String>,
+    point_mode: i64,
+    point_size: f64,
 ) -> Option<DisplayItem> {
     if number(&entity.properties, "invisible").unwrap_or(0.0) != 0.0 {
         return None;
@@ -1053,7 +1098,16 @@ fn display_item(
                     .or_else(|| point(&entity.properties, "location"))
                     .or_else(|| xy_point(&entity.properties))?,
             );
-            let r = 0.1 * matrix_scale(transform);
+            let size = if point_size > 0.0 {
+                point_size * matrix_scale(transform)
+            } else {
+                point_size
+            };
+            let r = if point_mode != 0 && size > 0.0 {
+                size / 2.0
+            } else {
+                0.0
+            };
             points_for_bounds.extend([
                 Point2 {
                     x: p.x - r,
@@ -1064,20 +1118,10 @@ fn display_item(
                     y: p.y + r,
                 },
             ]);
-            Graphic::Path {
-                data: format!(
-                    "M {} {} L {} {} M {} {} L {} {}",
-                    f(p.x - r),
-                    f(p.y),
-                    f(p.x + r),
-                    f(p.y),
-                    f(p.x),
-                    f(p.y - r),
-                    f(p.x),
-                    f(p.y + r)
-                ),
-                fill: false,
-                transform: None,
+            Graphic::Point {
+                point: p,
+                mode: point_mode,
+                size,
             }
         }
         "AcDbWipeout" => {
@@ -1129,7 +1173,14 @@ fn display_item(
     for point in points_for_bounds {
         bounds.include(point);
     }
-    if !bounds.valid() {
+    if !bounds.valid()
+        && !(matches!(graphic, Graphic::Point { .. })
+            && bounds
+                .min
+                .iter()
+                .chain(bounds.max.iter())
+                .all(|v| v.is_finite()))
+    {
         return None;
     }
     Some(DisplayItem {
@@ -2038,12 +2089,34 @@ fn items_bounds(items: &[DisplayItem]) -> Option<Bounds> {
             bounds.include_bounds(item_bounds);
         }
     }
+    if !bounds.valid() && bounds.min == bounds.max && bounds.min.iter().all(|v| v.is_finite()) {
+        bounds.min = bounds.min.map(|v| v - 0.5);
+        bounds.max = bounds.max.map(|v| v + 0.5);
+    }
     bounds.valid().then_some(bounds)
 }
 
 fn item_effective_bounds(item: &DisplayItem) -> Option<Bounds> {
     item.clip
         .map_or(Some(item.bounds), |clip| item.bounds.intersection(clip))
+}
+
+// Relative marker extents matter for culling, but must not enlarge fitted bounds.
+fn item_visible_bounds(item: &DisplayItem, region: Option<Bounds>) -> Option<Bounds> {
+    let mut bounds = item.bounds;
+    if let Graphic::Point { mode, size, .. } = item.graphic {
+        if mode != 0 && size <= 0.0 {
+            if let Some(view) = item.clip.or(region) {
+                let radius = (view.max[1] - view.min[1])
+                    * if size < 0.0 { -size / 100.0 } else { 0.05 }
+                    / 2.0;
+                bounds.min = bounds.min.map(|v| v - radius);
+                bounds.max = bounds.max.map(|v| v + radius);
+            }
+        }
+    }
+    item.clip
+        .map_or(Some(bounds), |clip| bounds.intersection(clip))
 }
 
 fn automatic_bounds(items: &[DisplayItem], diagnostics: &mut RenderDiagnostics) -> Option<Bounds> {
@@ -2193,6 +2266,59 @@ fn svg_document(
             item.color.as_str()
         };
         match &item.graphic {
+            Graphic::Point { point, mode, size } => {
+                let viewport_height = item
+                    .clip
+                    .map_or(view_height, |clip| clip.max[1] - clip.min[1]);
+                let size = if *size > 0.0 {
+                    *size
+                } else if *size < 0.0 {
+                    -size * viewport_height / 100.0
+                } else {
+                    viewport_height * 0.05
+                };
+                let r = size / 2.0;
+                let mut marker = String::new();
+                match mode & 31 {
+                    0 => marker.push_str(&format!(
+                        "<circle cx=\"0\" cy=\"0\" r=\"{}\" fill=\"{color}\" stroke=\"none\"/>",
+                        f(stroke_width / 2.0)
+                    )),
+                    2 => marker.push_str(&format!(
+                        "<path d=\"M {} 0 L {} 0 M 0 {} L 0 {}\"/>",
+                        f(-r),
+                        f(r),
+                        f(-r),
+                        f(r)
+                    )),
+                    3 => marker.push_str(&format!(
+                        "<path d=\"M {} {} L {} {} M {} {} L {} {}\"/>",
+                        f(-r),
+                        f(-r),
+                        f(r),
+                        f(r),
+                        f(-r),
+                        f(r),
+                        f(r),
+                        f(-r)
+                    )),
+                    4 => marker.push_str(&format!("<path d=\"M 0 0 L 0 {}\"/>", f(r))),
+                    _ => {}
+                }
+                if mode & 32 != 0 {
+                    marker.push_str(&format!("<circle cx=\"0\" cy=\"0\" r=\"{}\"/>", f(r)));
+                }
+                if mode & 64 != 0 {
+                    marker.push_str(&format!(
+                        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>",
+                        f(-r),
+                        f(-r),
+                        f(size),
+                        f(size)
+                    ));
+                }
+                body.push_str(&format!("<g{clip_attr}{meta}><g transform=\"translate({} {})\" stroke=\"{color}\" stroke-width=\"{}\" fill=\"none\">{marker}</g></g>", f(point.x), f(point.y), f(stroke_width)));
+            }
             Graphic::Path {
                 data,
                 fill,
@@ -2270,6 +2396,7 @@ fn ensure_svg_size(items: &[DisplayItem]) -> Result<(), RenderError> {
         let content = match &item.graphic {
             Graphic::Path { data, .. } => data.len(),
             Graphic::Text { text, .. } => text.len(),
+            Graphic::Point { .. } => 1024,
         };
         estimated = estimated
             .checked_add(content.saturating_add(320))
@@ -2491,6 +2618,224 @@ mod tests {
         assert_eq!(output.diagnostics.rendered_entities, 2);
     }
 
+    fn point_document(mode: i64, size: f64) -> RenderDocument {
+        RenderDocument::new(vec![
+            entity("C", "BLOCK_CONTROL", None, json!({"model_space":"M"})),
+            entity("H", "HEADER", None, json!({"PDMODE":mode,"PDSIZE":size})),
+            entity(
+                "L",
+                "AcDbLine",
+                Some("M"),
+                json!({"start":[0,0],"end":[10,10]}),
+            ),
+            entity("P", "AcDbPoint", Some("M"), json!({"point":[0.005,0]})),
+        ])
+    }
+
+    fn point_svg(document: &RenderDocument, region: Option<Bounds>) -> (RenderOutput, String) {
+        let output = document
+            .render(RenderRequest {
+                width: 1000,
+                height: 1000,
+                format: RenderFormat::Svg,
+                region,
+                padding: 0.0,
+                ..serde_json::from_value(json!({})).unwrap()
+            })
+            .unwrap();
+        let svg = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(&output.data)
+                .unwrap(),
+        )
+        .unwrap();
+        (output, svg)
+    }
+
+    #[test]
+    fn default_points_are_pixel_dots_and_hidden_points_are_skipped() {
+        let (output, svg) = point_svg(&point_document(0, 100.0), None);
+        assert!(svg.contains("<circle cx=\"0\" cy=\"0\" r=\"0.005\""));
+        assert!(!svg.contains("M -0.095"));
+        assert_eq!(output.rendered_region.min, [0.0, 0.0]);
+        assert_eq!(output.rendered_region.max, [10.0, 10.0]);
+        let (output, svg) = point_svg(&point_document(1, 0.0), None);
+        assert!(!svg.contains("data-handle=\"P\""));
+        assert_eq!(output.diagnostics.rendered_entities, 1);
+        assert!(output.diagnostics.fallbacks.is_empty());
+    }
+
+    #[test]
+    fn point_styles_and_absolute_sizes_are_respected() {
+        for (mode, expected) in [
+            (2, "M -2 0 L 2 0 M 0 -2 L 0 2"),
+            (3, "M -2 -2 L 2 2 M -2 2 L 2 -2"),
+            (4, "M 0 0 L 0 2"),
+            (34, "<circle cx=\"0\" cy=\"0\" r=\"2\"/>"),
+            (66, "<rect x=\"-2\" y=\"-2\" width=\"4\" height=\"4\"/>"),
+            (98, "<circle cx=\"0\" cy=\"0\" r=\"2\"/>"),
+        ] {
+            let (output, svg) = point_svg(&point_document(mode, 4.0), None);
+            assert!(svg.contains(expected), "mode {mode}: {svg}");
+            assert!(output.rendered_region.min[0] < -1.9);
+            assert!(output.rendered_region.min[1] <= -2.0);
+        }
+    }
+
+    #[test]
+    fn relative_point_sizes_follow_view_height_without_inflating_fit() {
+        for (size, radius) in [(0.0, 0.25), (-10.0, 0.5)] {
+            let document = point_document(34, size);
+            let (output, svg) = point_svg(&document, None);
+            assert_eq!(output.rendered_region.min, [0.0, 0.0]);
+            assert_eq!(output.rendered_region.max, [10.0, 10.0]);
+            assert!(svg.contains(&format!("r=\"{radius}\"/>")));
+            let region = Bounds {
+                min: [-10.0, -10.0],
+                max: [10.0, 10.0],
+            };
+            let (_, svg) = point_svg(&document, Some(region));
+            assert!(svg.contains(&format!("r=\"{}\"/>", radius * 2.0)));
+        }
+    }
+
+    #[test]
+    fn dimension_defpoints_stay_dots_even_with_large_point_markers() {
+        let mut document = point_document(98, 100.0);
+        document.entities.extend([
+            entity(
+                "DEF",
+                "AcDbLayerTableRecord",
+                None,
+                json!({"name":"Defpoints"}),
+            ),
+            entity(
+                "D",
+                "AcDbDiametricDimension",
+                Some("M"),
+                json!({"block":"B"}),
+            ),
+            entity(
+                "DP",
+                "AcDbPoint",
+                Some("B"),
+                json!({"point":[0.005,0],"layer":"DEF"}),
+            ),
+            entity(
+                "G",
+                "AcDbLine",
+                Some("B"),
+                json!({"start":[0,0],"end":[10,10]}),
+            ),
+        ]);
+        document.entities.retain(|e| e.handle != "P");
+        let (output, svg) = point_svg(&RenderDocument::new(document.entities), None);
+        assert_eq!(output.rendered_region.min, [0.0, 0.0]);
+        assert_eq!(output.rendered_region.max, [10.0, 10.0]);
+        assert!(svg.contains("data-handle=\"DP\""));
+        assert!(svg.contains("r=\"0.005\""));
+        assert!(!svg.contains("<rect x=\"-50\""));
+        assert_eq!(output.diagnostics.fallbacks.get("generatedBlock"), Some(&1));
+    }
+
+    #[test]
+    fn relative_markers_overlapping_a_region_are_not_culled() {
+        let region = Bounds {
+            min: [0.0, 0.0],
+            max: [10.0, 10.0],
+        };
+        let document = RenderDocument::new(vec![
+            entity("C", "BLOCK_CONTROL", None, json!({"model_space":"M"})),
+            entity("H", "HEADER", None, json!({"PDMODE":34,"PDSIZE":-10})),
+            entity("P", "AcDbPoint", Some("M"), json!({"point":[-0.25,5]})),
+            entity("FAR", "AcDbPoint", Some("M"), json!({"point":[-2,5]})),
+        ]);
+        let (output, svg) = point_svg(&document, Some(region));
+        assert_eq!(output.diagnostics.rendered_entities, 1);
+        assert!(svg.contains("data-handle=\"P\""));
+        assert!(!svg.contains("data-handle=\"FAR\""));
+        let item = display_item(
+            &document.entities[2],
+            Matrix::IDENTITY,
+            Some(region),
+            &HashMap::new(),
+            34,
+            -10.0,
+        )
+        .unwrap();
+        assert!(item_effective_bounds(&item).is_none());
+        assert!(item_visible_bounds(&item, None).is_some());
+    }
+
+    #[test]
+    fn single_point_and_clipped_points_remain_drawable() {
+        let p = entity("P", "AcDbPoint", Some("M"), json!({"point":[5,5]}));
+        let item = display_item(
+            &p,
+            Matrix::IDENTITY,
+            Some(Bounds {
+                min: [0.0, 0.0],
+                max: [10.0, 10.0],
+            }),
+            &HashMap::new(),
+            0,
+            0.0,
+        )
+        .unwrap();
+        assert!(item_effective_bounds(&item).is_some());
+        let (_, svg) = point_svg(
+            &point_document(1, 0.0),
+            Some(Bounds {
+                min: [20.0, 20.0],
+                max: [30.0, 30.0],
+            }),
+        );
+        assert!(!svg.contains("data-type=\"AcDbPoint\""));
+        let scaled =
+            display_item(&p, Matrix::scale(2.0, 2.0), None, &HashMap::new(), 2, 4.0).unwrap();
+        assert_eq!(
+            scaled.bounds,
+            Bounds {
+                min: [6.0, 6.0],
+                max: [14.0, 14.0]
+            }
+        );
+        let clipped = display_item(
+            &p,
+            Matrix::IDENTITY,
+            Some(Bounds {
+                min: [0.0, 0.0],
+                max: [10.0, 10.0],
+            }),
+            &HashMap::new(),
+            34,
+            -10.0,
+        )
+        .unwrap();
+        let svg = svg_document(
+            &[clipped],
+            Bounds {
+                min: [0.0, 0.0],
+                max: [100.0, 100.0],
+            },
+            100,
+            100,
+            RenderBackground::White,
+        )
+        .unwrap();
+        assert!(svg.contains("r=\"0.5\"/>"));
+        let document = RenderDocument::new(vec![
+            entity("C", "BLOCK_CONTROL", None, json!({"model_space":"M"})),
+            p,
+        ]);
+        let (_, svg) = point_svg(&document, None);
+        assert!(svg.contains("data-handle=\"P\""));
+        let output = document
+            .render(serde_json::from_value(json!({"width":100,"height":100})).unwrap())
+            .unwrap();
+        assert_eq!(output.mime_type, "image/png");
+    }
+
     #[test]
     fn deserializes_layout_and_viewport_targets_from_protocol_json() {
         let layout: RenderRequest = serde_json::from_value(json!({
@@ -2552,7 +2897,15 @@ mod tests {
                 "end_angle":6.283185307179586
             }),
         );
-        let item = display_item(&ellipse, Matrix::scale(2.0, 0.5), None, &HashMap::new()).unwrap();
+        let item = display_item(
+            &ellipse,
+            Matrix::scale(2.0, 0.5),
+            None,
+            &HashMap::new(),
+            0,
+            0.0,
+        )
+        .unwrap();
         let Graphic::Path {
             data, transform, ..
         } = item.graphic
