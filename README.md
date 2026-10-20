@@ -14,6 +14,31 @@ The npm package downloads the matching native build from GitHub Releases on
 first use, verifies its SHA-256 checksum, caches it, and runs it directly.
 Docker and a separate Python installation are not required.
 
+### Native installers
+
+macOS Apple Silicon:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dimitrovakulenko/dwg-mcp-server/main/scripts/install.sh | sh
+```
+
+Windows x64 (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/dimitrovakulenko/dwg-mcp-server/main/scripts/install.ps1 | iex
+```
+
+Both installers download the latest native release and verify its SHA-256
+checksum before installation.
+
+After installing, point your MCP client at the installed executable. On macOS
+add `~/.local/bin` to `PATH` first, or use the absolute path reported by the
+installer:
+
+```bash
+claude mcp add --scope user --transport stdio dwg-mcp -- dwg-mcp-server
+```
+
 If your MCP client, AI agent, or test harness does not support MCP roots, set
 `DWG_MCP_ALLOWED_ROOTS` to the folders that should be accessible.
 

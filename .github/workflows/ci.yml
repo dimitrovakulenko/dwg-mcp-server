@@ -147,3 +147,16 @@ jobs:
           LIBREDWG_SOURCE_ROOT: ${{ github.workspace }}/third_party/libredwg/src
           PYTHONPATH: server/src
         run: python -m unittest server.tests.test_file_access server.tests.test_host server.tests.test_mcp_stdio -v
+
+      - name: Validate macOS installer
+        if: runner.os == 'macOS'
+        run: sh -n scripts/install.sh
+
+      - name: Validate Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/install.ps1), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { $errors | Write-Error; exit 1 }
