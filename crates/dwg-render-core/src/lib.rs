@@ -2570,7 +2570,13 @@ fn clean_mtext(value: &str) -> String {
                     .collect::<String>();
                 output.push_str(&stacked.replace(['#', '^'], "/"));
             }
-            'A' | 'C' | 'F' | 'H' | 'Q' | 'T' | 'W' | 'f' => {
+            // Formatting switches that carry no argument. They must be
+            // dropped rather than fall through to the default arm, which would
+            // leave the control letter itself in the rendered text.
+            'L' | 'l' | 'O' | 'o' | 'K' | 'k' => {}
+            'X' => output.push('\n'),
+            // Formatting codes whose argument runs up to the next semicolon.
+            'A' | 'C' | 'c' | 'F' | 'H' | 'Q' | 'T' | 'W' | 'f' | 'p' => {
                 for next in chars.by_ref() {
                     if next == ';' {
                         break;
@@ -3143,6 +3149,21 @@ mod tests {
         let value_start = element.find(key).expect("path has a stroke width") + key.len();
         let value = &element[value_start..];
         value[..value.find('"').unwrap()].parse().unwrap()
+    }
+
+    #[test]
+    fn mtext_formatting_switches_do_not_leak_into_rendered_text() {
+        // Underline, overline and strikethrough switches carry no argument, so
+        // a naive decoder emits their control letter as text.
+        assert_eq!(
+            clean_mtext("{\\LLIVING ROOM\\P\\H0.6667x;\\lHRWD FLOOR}"),
+            "LIVING ROOM\nHRWD FLOOR"
+        );
+        assert_eq!(clean_mtext("\\Oover\\o \\Kstruck\\k"), "over struck");
+        assert_eq!(clean_mtext("above\\Xbelow"), "above\nbelow");
+        // Argument-carrying codes stay consumed up to their semicolon.
+        assert_eq!(clean_mtext("\\pxi-3,l4;indented"), "indented");
+        assert_eq!(clean_mtext("\\c16711680;red"), "red");
     }
 
     #[test]
