@@ -113,10 +113,13 @@ Input rules:
 - A model region uses the rendered model view plane.
 - A layout region uses paper-space drawing units.
 - A viewport region uses its projected model view coordinates.
-- When `region` is omitted, the target is fitted to the output. Extreme sparse
-  extents are excluded only when they are at least 20 times larger than the
-  central 98% of entity bounds; diagnostics report the full bounds so a caller
-  can request them explicitly.
+- When `region` is omitted, the target is fitted to the output. Sparse extents
+  are excluded only when they are detached: the central 98% of entity bounds is
+  grown back outwards over every gap smaller than a quarter of its own span, and
+  whatever remains outside is dropped when it would otherwise stretch an axis by
+  at least 4 times. This keeps drawings whose outer geometry simply continues
+  outwards intact while ignoring content parked far off a paper-space sheet.
+  Diagnostics report the full bounds so a caller can request them explicitly.
 - Automatic fit expands the region to the output aspect ratio. An explicit
   `region` is returned unchanged.
 - `width` and `height` are pixel dimensions and have server-enforced limits.
@@ -243,6 +246,13 @@ Each command retains:
 SVG is the canonical output backend because it directly represents paths,
 text, transforms, reused block symbols, and clipping. PNG is rasterized in
 memory from the generated SVG so the two formats use identical geometry.
+
+Path geometry stays in the coordinate system it was authored in and carries the
+insert or viewport transform as an SVG `transform`, so stroke widths must be
+divided by that transform's scale before they are emitted. `vector-effect`
+cannot be used for this: the rasterizer ignores it for upscaling transforms,
+which renders every entity inside a scaled block with a stroke as wide as the
+insert scale.
 
 Curve geometry is preserved as far as SVG permits: circles, circular arcs,
 ellipses, elliptical arcs, lightweight-polyline bulges, and quadratic/cubic

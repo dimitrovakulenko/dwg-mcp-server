@@ -12,7 +12,8 @@ const MAX_DISPLAY_ITEMS: usize = 250_000;
 const MAX_SVG_BYTES: usize = 32 * 1024 * 1024;
 const ROBUST_FIT_MIN_ITEMS: usize = 100;
 const ROBUST_FIT_TRIM_DIVISOR: usize = 100;
-const ROBUST_FIT_OUTLIER_RATIO: f64 = 20.0;
+const ROBUST_FIT_OUTLIER_RATIO: f64 = 4.0;
+const ROBUST_FIT_GAP_FRACTION: f64 = 0.25;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -2147,8 +2148,20 @@ fn automatic_bounds(items: &[DisplayItem], diagnostics: &mut RenderDiagnostics) 
             .collect::<Vec<_>>();
         mins.sort_by(f64::total_cmp);
         maxs.sort_by(f64::total_cmp);
-        let candidate_min = mins[trim];
-        let candidate_max = maxs[effective.len() - trim - 1];
+        let core_min = mins[trim];
+        let core_max = maxs[effective.len() - trim - 1];
+        let core_span = core_max - core_min;
+        if !(core_span > 0.0) {
+            continue;
+        }
+        // Only content separated from the trimmed core by a genuine empty band
+        // counts as an outlier. Everything closer is pulled back in, so a
+        // drawing whose outer items simply continue outwards keeps its extents
+        // and only detached leftovers, such as off-sheet paper-space content,
+        // are dropped.
+        let tolerance = core_span * ROBUST_FIT_GAP_FRACTION;
+        let candidate_min = grow_below(&mins, trim, tolerance);
+        let candidate_max = grow_above(&maxs, effective.len() - trim - 1, tolerance);
         let full_span = full.max[axis] - full.min[axis];
         let candidate_span = candidate_max - candidate_min;
         if candidate_span > 0.0 && full_span / candidate_span >= ROBUST_FIT_OUTLIER_RATIO {
@@ -2171,6 +2184,32 @@ fn automatic_bounds(items: &[DisplayItem], diagnostics: &mut RenderDiagnostics) 
         f(full.max[1])
     ));
     Some(robust)
+}
+
+/// Walks down a sorted list from `start` while consecutive values stay within
+/// `tolerance` of each other, returning the lowest value still connected to the
+/// starting one.
+fn grow_below(sorted: &[f64], start: usize, tolerance: f64) -> f64 {
+    let mut bound = sorted[start];
+    for value in sorted[..start].iter().rev() {
+        if bound - value > tolerance {
+            break;
+        }
+        bound = *value;
+    }
+    bound
+}
+
+/// Mirror of [`grow_below`] walking towards the end of the sorted list.
+fn grow_above(sorted: &[f64], start: usize, tolerance: f64) -> f64 {
+    let mut bound = sorted[start];
+    for value in &sorted[start + 1..] {
+        if value - bound > tolerance {
+            break;
+        }
+        bound = *value;
+    }
+    bound
 }
 
 fn fit_output_aspect(mut bounds: Bounds, width: u32, height: u32) -> Bounds {
@@ -2325,13 +2364,15 @@ fn svg_document(
                 transform,
             } => {
                 let transform_attr = transform
-                    .map(|matrix| {
-                        format!(
-                            " transform=\"{}\" vector-effect=\"non-scaling-stroke\"",
-                            matrix.svg()
-                        )
-                    })
+                    .map(|matrix| format!(" transform=\"{}\"", matrix.svg()))
                     .unwrap_or_default();
+                // Path data stays in the entity's own coordinate system, so the
+                // stroke has to be expressed there too. `vector-effect` is not a
+                // reliable substitute: resvg ignores it for upscaling transforms,
+                // which turns a hairline into a stroke the size of the insert scale.
+                let item_stroke_width = transform
+                    .map(|matrix| stroke_width / local_stroke_divisor(matrix))
+                    .unwrap_or(stroke_width);
                 let fill_opacity = if item.type_name == "AcDbWipeout" {
                     "1"
                 } else if *fill {
@@ -2344,7 +2385,7 @@ fn svg_document(
                 } else {
                     color
                 };
-                body.push_str(&format!("<g{clip_attr}{meta}><path d=\"{data}\" stroke=\"{stroke}\" stroke-width=\"{}\" fill=\"{}\" fill-rule=\"evenodd\" fill-opacity=\"{fill_opacity}\"{transform_attr}/></g>", f(stroke_width), if *fill { color } else { "none" }));
+                body.push_str(&format!("<g{clip_attr}{meta}><path d=\"{data}\" stroke=\"{stroke}\" stroke-width=\"{}\" fill=\"{}\" fill-rule=\"evenodd\" fill-opacity=\"{fill_opacity}\"{transform_attr}/></g>", f(item_stroke_width), if *fill { color } else { "none" }));
             }
             Graphic::Text {
                 point,
@@ -2470,6 +2511,19 @@ fn string<'a>(properties: &'a BTreeMap<String, Value>, key: &str) -> Option<&'a 
         .and_then(Value::as_str)
         .filter(|value| *value != "0" && !value.is_empty())
 }
+/// Scale factor used to express an output-pixel stroke width inside a
+/// transformed path's own coordinate system. Degenerate or extreme transforms
+/// fall back to 1.0 so a malformed insert cannot produce an infinite or zero
+/// stroke width.
+fn local_stroke_divisor(matrix: Matrix) -> f64 {
+    let scale = matrix_scale(matrix);
+    if scale.is_finite() && scale > f64::EPSILON {
+        scale
+    } else {
+        1.0
+    }
+}
+
 fn matrix_scale(matrix: Matrix) -> f64 {
     ((matrix.a * matrix.a + matrix.b * matrix.b).sqrt()
         + (matrix.c * matrix.c + matrix.d * matrix.d).sqrt())
@@ -3068,6 +3122,170 @@ mod tests {
         assert!(svg.contains("data-handle=\"G\""));
         assert_eq!(output.diagnostics.rendered_entities, 1);
         assert_eq!(output.diagnostics.fallbacks.get("generatedBlock"), Some(&1));
+    }
+
+    fn svg_of(output: RenderOutput) -> String {
+        String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(output.data)
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn stroke_width_of(svg: &str, handle: &str) -> f64 {
+        let marker = format!("data-handle=\"{handle}\"");
+        let start = svg.find(&marker).expect("handle is present in the SVG");
+        let tail = &svg[start..];
+        let end = tail.find("/></g>").expect("path element is closed");
+        let element = &tail[..end];
+        let key = "stroke-width=\"";
+        let value_start = element.find(key).expect("path has a stroke width") + key.len();
+        let value = &element[value_start..];
+        value[..value.find('"').unwrap()].parse().unwrap()
+    }
+
+    #[test]
+    fn scaled_block_inserts_keep_hairline_strokes() {
+        let document = RenderDocument::new(vec![
+            entity("C", "BLOCK_CONTROL", None, json!({"model_space":"M"})),
+            entity(
+                "PLAIN",
+                "AcDbCircle",
+                Some("M"),
+                json!({"center":[500,500,0],"radius":100}),
+            ),
+            entity(
+                "INS",
+                "AcDbBlockReference",
+                Some("M"),
+                json!({"ins_pt":[500,500,0],"scale":[1000,1000,1000],"block_header":"B"}),
+            ),
+            entity(
+                "INNER",
+                "AcDbCircle",
+                Some("B"),
+                json!({"center":[0,0,0],"radius":0.1}),
+            ),
+        ]);
+
+        let svg = svg_of(
+            document
+                .render(RenderRequest {
+                    format: RenderFormat::Svg,
+                    ..serde_json::from_value(json!({
+                        "target": {"kind": "model"},
+                        "region": {"min": [0.0, 0.0], "max": [1000.0, 1000.0]},
+                        "width": 1000,
+                        "height": 1000
+                    }))
+                    .unwrap()
+                })
+                .unwrap(),
+        );
+
+        // One output pixel is one drawing unit for this region, and the block is
+        // inserted at scale 1000, so its geometry needs a stroke 1000 times
+        // narrower to come out the same width on screen.
+        let plain = stroke_width_of(&svg, "PLAIN");
+        let inner = stroke_width_of(&svg, "INNER");
+        assert!((plain - 1.0).abs() < 1e-6, "plain stroke width was {plain}");
+        assert!(
+            (inner - 0.001).abs() < 1e-9,
+            "block stroke width was {inner}"
+        );
+        assert!(
+            !svg.contains("non-scaling-stroke"),
+            "stroke scaling must not depend on vector-effect"
+        );
+    }
+
+    #[test]
+    fn automatic_fit_drops_detached_paper_space_leftovers() {
+        let mut entities = vec![entity(
+            "C",
+            "BLOCK_CONTROL",
+            None,
+            json!({"model_space":"M"}),
+        )];
+        for index in 0..300 {
+            let y = f64::from(index / 3);
+            entities.push(entity(
+                &format!("L{index}"),
+                "AcDbLine",
+                Some("M"),
+                json!({"start":[0,y,0],"end":[100,y,0]}),
+            ));
+        }
+        for (index, y) in [700.0, 701.0].into_iter().enumerate() {
+            entities.push(entity(
+                &format!("FAR{index}"),
+                "AcDbLine",
+                Some("M"),
+                json!({"start":[0,y,0],"end":[100,y,0]}),
+            ));
+        }
+
+        let output = RenderDocument::new(entities)
+            .render(RenderRequest {
+                format: RenderFormat::Svg,
+                ..serde_json::from_value(json!({})).unwrap()
+            })
+            .unwrap();
+
+        assert!(
+            output.rendered_region.max[1] < 200.0,
+            "detached content still drove the fit: {:?}",
+            output.rendered_region
+        );
+        assert!(
+            output
+                .diagnostics
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("automatic fit ignored extreme y-axis"))
+        );
+    }
+
+    #[test]
+    fn automatic_fit_keeps_outliers_that_continue_outwards() {
+        let mut entities = vec![entity(
+            "C",
+            "BLOCK_CONTROL",
+            None,
+            json!({"model_space":"M"}),
+        )];
+        for index in 0..300 {
+            let y = f64::from(index / 3);
+            entities.push(entity(
+                &format!("L{index}"),
+                "AcDbLine",
+                Some("M"),
+                json!({"start":[0,y,0],"end":[100,y,0]}),
+            ));
+        }
+        for (index, y) in [120.0, 140.0, 160.0].into_iter().enumerate() {
+            entities.push(entity(
+                &format!("STEP{index}"),
+                "AcDbLine",
+                Some("M"),
+                json!({"start":[0,y,0],"end":[100,y,0]}),
+            ));
+        }
+
+        let output = RenderDocument::new(entities)
+            .render(RenderRequest {
+                format: RenderFormat::Svg,
+                ..serde_json::from_value(json!({})).unwrap()
+            })
+            .unwrap();
+
+        assert!(
+            output.rendered_region.max[1] >= 160.0,
+            "content that continues outwards was cropped: {:?}",
+            output.rendered_region
+        );
+        assert!(output.diagnostics.warnings.is_empty());
     }
 
     #[test]
