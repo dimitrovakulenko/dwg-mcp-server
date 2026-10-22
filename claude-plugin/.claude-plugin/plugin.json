@@ -26,8 +26,9 @@
     "drawings_directory": {
       "type": "directory",
       "title": "Drawings folder",
-      "description": "Absolute path of the folder holding the DWG and DXF files this plugin may read. The server never writes to it.",
-      "required": true
+      "description": "Absolute path of the folder holding the DWG and DXF files this plugin may read. The server never writes to it. Left empty, the server falls back to the roots the client provides.",
+      "required": true,
+      "default": ""
     }
   }
 }

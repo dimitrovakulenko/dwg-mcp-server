@@ -46,9 +46,15 @@ ARM64. Intel macOS needs a release that publishes an Intel build; version
 
 ## Where it runs
 
-The server runs as a local process, so it loads in Claude Code and in Cowork
-sessions running on your own computer. Chat on claude.ai and the mobile apps
-skip local MCP servers.
+The server runs as a local process, so it loads in Claude Code, where you are
+prompted for the drawings folder when you enable the plugin.
+
+Cowork runs local servers only in sessions on your own computer, and it never
+prompts for configuration, so it starts the server with no configured folder
+and the server reads whatever roots the session provides.
+
+Chat on claude.ai, the desktop app's chat, and the mobile apps skip local MCP
+servers entirely.
 
 ## Links
 
