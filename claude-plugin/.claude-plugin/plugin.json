@@ -1,0 +1,33 @@
+{
+  "name": "dwg-mcp-server",
+  "displayName": "DWG MCP Server",
+  "version": "0.2.4",
+  "description": "Read-only access to local DWG and DXF drawings: list drawing types, inspect and query objects, and render views as images.",
+  "author": {
+    "name": "Dmytro Vakulenko",
+    "url": "https://github.com/dimitrovakulenko"
+  },
+  "homepage": "https://github.com/dimitrovakulenko/dwg-mcp-server",
+  "repository": "https://github.com/dimitrovakulenko/dwg-mcp-server",
+  "license": "GPL-3.0-or-later",
+  "keywords": ["dwg", "dxf", "cad", "autocad", "drawings"],
+  "documentationUrl": "https://github.com/dimitrovakulenko/dwg-mcp-server#readme",
+  "supportUrl": "https://github.com/dimitrovakulenko/dwg-mcp-server/issues",
+  "mcpServers": {
+    "dwg-mcp": {
+      "command": "npx",
+      "args": ["-y", "@dmytro-prototypes/dwg-mcp-server@0.2.4"],
+      "env": {
+        "DWG_MCP_ALLOWED_ROOTS": "${user_config.drawings_directory}"
+      }
+    }
+  },
+  "userConfig": {
+    "drawings_directory": {
+      "type": "directory",
+      "title": "Drawings folder",
+      "description": "Absolute path of the folder holding the DWG and DXF files this plugin may read. The server never writes to it.",
+      "required": true
+    }
+  }
+}
