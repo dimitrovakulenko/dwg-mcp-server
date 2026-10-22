@@ -13,6 +13,8 @@
   "keywords": ["dwg", "dxf", "cad", "autocad", "drawings"],
   "documentationUrl": "https://github.com/dimitrovakulenko/dwg-mcp-server#readme",
   "supportUrl": "https://github.com/dimitrovakulenko/dwg-mcp-server/issues",
+  "privacyPolicyUrl": "https://github.com/dimitrovakulenko/dwg-mcp-server/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/dimitrovakulenko/dwg-mcp-server/blob/main/TERMS.md",
   "mcpServers": {
     "dwg-mcp": {
       "command": "npx",
