@@ -31,7 +31,7 @@ The server is a native binary, too large to ship inside a plugin, so the
 plugin starts it through its npm launcher:
 
 ```
-npx -y @dmytro-prototypes/dwg-mcp-server@0.2.5
+npx -y @dmytro-prototypes/dwg-mcp-server@0.2.6
 ```
 
 On first run that launcher downloads the platform build for your computer from
