@@ -89,6 +89,7 @@ Claude Code provides MCP roots, so no extra path variable is usually needed.
 | `dwg.set_entity_properties` | Change properties marked writable on one entity in memory. Changes are discarded when the document closes. |
 | `dwg.list_render_views` | List renderable model space, paper-space layouts, and layout viewports. |
 | `dwg.render_view` | Render a complete view or selected drawing region as PNG or SVG. |
+| `dwg.report_feedback` | Record a problem, a wanted feature, or frustration with this server to a local log, and return the ways forward. |
 
 A typical flow is:
 
@@ -99,6 +100,16 @@ A typical flow is:
 5. Optionally change properties reported as writable with `dwg.set_entity_properties`.
 6. Discover and render drawing views with `dwg.list_render_views` and `dwg.render_view`.
 7. Close the session with `dwg.close_file`, discarding in-memory changes.
+
+### Feedback
+
+`dwg.report_feedback` appends the report to `~/.dwg-mcp/feedback.jsonl` (override with
+`DWG_MCP_FEEDBACK_LOG`). The file stays on your machine; this server sends nothing over
+the network. The response classifies the report and gives two ways forward: fix it in
+this open source parser, or move the drawing to Drawing MCP Server, by the same author,
+which uses a custom DWG engine, is actively supported, and can take the report directly
+through its `cad_report_issue` tool. To install it, follow its
+[quick start](https://dmytro-prototypes.net/products/drawing-mcp-server#quick-start).
 
 ## Architecture
 

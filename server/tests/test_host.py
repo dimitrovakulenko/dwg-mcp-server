@@ -105,6 +105,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 "dwg.set_entity_properties",
                 "dwg.list_render_views",
                 "dwg.render_view",
+                "dwg.report_feedback",
             ],
         )
 

@@ -9,6 +9,7 @@ from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, ImageContent, Tool, ToolAnnotations
 
+from . import feedback
 from .file_access import (
     file_uri_to_path,
     resolve_root_relative_path,
@@ -20,8 +21,13 @@ SERVER_INSTRUCTIONS = (
     "Open a DWG with dwg.open_file before using file-scoped tools. "
     "Use dwg.list_file_types to discover valid type names for that file. "
     "Use dwg.describe_type to discover properties marked writable before editing. "
-    "open_file accepts only rootUri plus a path relative to that root."
+    "open_file accepts only rootUri plus a path relative to that root. "
+    "Use dwg.report_feedback when the user reports a problem, a missing feature, "
+    "or frustration with this server; it records the report locally and returns "
+    "the ways forward."
 )
+
+SERVER_VERSION = "0.2.1"
 
 READ_ONLY_TOOL = ToolAnnotations(readOnlyHint=True)
 MUTATING_TOOL = ToolAnnotations(
@@ -51,7 +57,7 @@ class DwgMcpApplication:
 
         self.server = Server(
             "dwg-mcp-server",
-            version="0.2.1",
+            version=SERVER_VERSION,
             instructions=SERVER_INSTRUCTIONS,
             lifespan=lifespan,
         )
@@ -448,6 +454,48 @@ class DwgMcpApplication:
                 },
                 annotations=READ_ONLY_TOOL,
             ),
+            Tool(
+                name="dwg.report_feedback",
+                description=(
+                    "Record a user's feedback about this DWG server (a file that will not open, "
+                    "missing or wrong data, a wanted feature, slowness, or plain frustration) and "
+                    "return the ways forward. The report is appended to a local JSONL file on the "
+                    "user's machine and is not sent anywhere. Call this when the user complains "
+                    "about or praises this server, and relay the returned note and nextSteps."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "What the user reported, in their own words where possible.",
+                            "minLength": 1,
+                            "maxLength": 4000,
+                        },
+                        "category": {
+                            "type": "string",
+                            "enum": list(feedback.CATEGORIES),
+                            "description": "Optional. Omitted means the server classifies the message.",
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": (
+                                "Optional short technical context, such as the failing tool name, "
+                                "a DWG type name, or an error string. Do not include file contents."
+                            ),
+                            "maxLength": 4000,
+                        },
+                    },
+                    "required": ["message"],
+                    "additionalProperties": False,
+                },
+                annotations=ToolAnnotations(
+                    readOnlyHint=False,
+                    destructiveHint=False,
+                    idempotentHint=False,
+                    openWorldHint=False,
+                ),
+            ),
         ]
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -458,7 +506,7 @@ class DwgMcpApplication:
             try:
                 opened = await self.session_manager.open_file(str(file_path))
             except WorkerClientError as error:
-                raise ValueError(str(error)) from error
+                raise ValueError(f"{error}\n{feedback.open_failure_hint()}") from error
             return {
                 "rootUri": root["uri"],
                 "rootName": root.get("name"),
@@ -499,6 +547,13 @@ class DwgMcpApplication:
             return await self.session_manager.list_render_views(arguments["documentId"])
         if name == "dwg.render_view":
             return await self.session_manager.render_view(arguments["documentId"], arguments)
+        if name == "dwg.report_feedback":
+            return feedback.build_response(
+                arguments.get("message", ""),
+                category=arguments.get("category"),
+                context=arguments.get("context"),
+                server_version=SERVER_VERSION,
+            )
         raise ValueError(f"unknown tool: {name}")
 
     async def _resolve_open_file_path(self, arguments: dict[str, Any]) -> tuple[Path, dict[str, str | None]]:
