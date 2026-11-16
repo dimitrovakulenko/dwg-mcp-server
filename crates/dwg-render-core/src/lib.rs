@@ -1878,6 +1878,7 @@ fn hatch_geometry(
 
         let mut contour_data = String::new();
         let mut started = false;
+        let mut current: Option<Point2> = None;
         for segment in contour
             .get("segments")
             .and_then(Value::as_array)
@@ -1903,6 +1904,7 @@ fn hatch_geometry(
                             started = true;
                         }
                         contour_data.push_str(&format!(" L {} {}", f(points[1].x), f(points[1].y)));
+                        current = Some(points[1]);
                         all_points.extend(points.into_iter().map(|point| transform.point(point)));
                     }
                 }
@@ -1914,23 +1916,26 @@ fn hatch_geometry(
                     if let (Some(center), Some(radius), Some(start), Some(end)) =
                         (center, radius, start, end)
                     {
-                        let is_ccw = segment
-                            .get("isCcw")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(true);
-                        let (first, commands, points) = ellipse_arc_geometry(
+                        let (first, commands, points, last) = ellipse_arc_geometry(
                             center,
                             Point2 { x: radius, y: 0.0 },
                             1.0,
                             start,
                             end,
-                            is_ccw,
+                            HATCH_ARC_IS_CCW,
                         );
                         if !started {
                             contour_data.push_str(&format!("M {} {}", f(first.x), f(first.y)));
                             started = true;
+                        } else if current.is_some_and(|point| !same_point(point, first)) {
+                            // The arc is anchored to its own start. Without this a
+                            // gap in the boundary is bridged by the arc itself,
+                            // which on a large radius balloons into a disc that
+                            // swallows the drawing.
+                            contour_data.push_str(&format!(" L {} {}", f(first.x), f(first.y)));
                         }
                         contour_data.push_str(&commands);
+                        current = Some(last);
                         all_points.extend(points.into_iter().map(|point| transform.point(point)));
                     }
                 }
@@ -1943,17 +1948,26 @@ fn hatch_geometry(
                     if let (Some(center), Some(major), Some(ratio), Some(start), Some(end)) =
                         (center, major, ratio, start, end)
                     {
-                        let is_ccw = segment
-                            .get("isCcw")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(true);
-                        let (first, commands, points) =
-                            ellipse_arc_geometry(center, major, ratio, start, end, is_ccw);
+                        let (first, commands, points, last) = ellipse_arc_geometry(
+                            center,
+                            major,
+                            ratio,
+                            start,
+                            end,
+                            HATCH_ARC_IS_CCW,
+                        );
                         if !started {
                             contour_data.push_str(&format!("M {} {}", f(first.x), f(first.y)));
                             started = true;
+                        } else if current.is_some_and(|point| !same_point(point, first)) {
+                            // The arc is anchored to its own start. Without this a
+                            // gap in the boundary is bridged by the arc itself,
+                            // which on a large radius balloons into a disc that
+                            // swallows the drawing.
+                            contour_data.push_str(&format!(" L {} {}", f(first.x), f(first.y)));
                         }
                         contour_data.push_str(&commands);
+                        current = Some(last);
                         all_points.extend(points.into_iter().map(|point| transform.point(point)));
                     }
                 }
@@ -1975,6 +1989,7 @@ fn hatch_geometry(
                             for point in &points[1..] {
                                 contour_data.push_str(&format!(" L {} {}", f(point.x), f(point.y)));
                             }
+                            current = points.last().copied();
                             all_points
                                 .extend(points.into_iter().map(|point| transform.point(point)));
                             approximate = true;
@@ -1999,6 +2014,29 @@ fn hatch_geometry(
     (data, all_points, approximate)
 }
 
+fn same_point(a: Point2, b: Point2) -> bool {
+    let scale =
+        a.x.abs()
+            .max(a.y.abs())
+            .max(b.x.abs())
+            .max(b.y.abs())
+            .max(1.0);
+    (a.x - b.x).abs() <= scale * 1e-6 && (a.y - b.y).abs() <= scale * 1e-6
+}
+
+/// Hatch boundary arcs sweep counter-clockwise from their start angle to
+/// their end angle.
+///
+/// The stored `isCcw` flag says which way the loop traverses the edge, not
+/// which of the two arcs between the angles is meant, and reading it as the
+/// latter is what turns a 3-degree arc into the 357-degree remainder. In the
+/// drawings this was measured against, every clockwise-flagged boundary arc
+/// would otherwise have swept more than 180 degrees, and the ones that state
+/// their own end points place them in counter-clockwise order. A loop stays
+/// continuous either way because a segment that does not meet the previous one
+/// is walked to first.
+const HATCH_ARC_IS_CCW: bool = true;
+
 fn ellipse_arc_geometry(
     center: Point2,
     major: Point2,
@@ -2006,7 +2044,7 @@ fn ellipse_arc_geometry(
     start: f64,
     end: f64,
     is_ccw: bool,
-) -> (Point2, String, Vec<Point2>) {
+) -> (Point2, String, Vec<Point2>, Point2) {
     let rx = major.x.hypot(major.y);
     let ry = rx * ratio.abs();
     let rotation_radians = major.y.atan2(major.x);
@@ -2060,10 +2098,11 @@ fn ellipse_arc_geometry(
             f(last.y)
         ));
     }
-    let points = (0..=48)
+    let points: Vec<Point2> = (0..=48)
         .map(|index| point_at(start + direction * delta * index as f64 / 48.0))
         .collect();
-    (first, commands, points)
+    let last = points.last().copied().unwrap_or(first);
+    (first, commands, points, last)
 }
 
 fn hatch_spline_points(properties: &BTreeMap<String, Value>) -> Option<Vec<Point2>> {
@@ -3122,6 +3161,105 @@ mod tests {
         assert!(data.ends_with("Z "));
         assert!(!approximate);
         assert!(bounds.len() > 10);
+    }
+
+    /// Taken from a drawing in the wild: the segment is flagged clockwise while
+    /// its angles and its stated end point describe a 2.7-degree
+    /// counter-clockwise sweep. Trusting the flag draws the 357-degree
+    /// remainder of a radius-1568 circle, which fills the sheet with a disc.
+    #[test]
+    fn hatch_arc_sweep_follows_the_stated_end_point_not_the_flag() {
+        let properties = serde_json::from_value(json!({
+            "is_solid_fill": true,
+            "contours": [{
+                "isClosed": true,
+                "segments": [{
+                    "type": "ellipticalArc",
+                    "center": [3744.204324132741, -340.9405098606985],
+                    "majorAxisVector": [1108.7701007129535, 1108.7701007129535],
+                    "minorMajorRatio": 0.9999999999992544,
+                    "startAngle": 4.275180375597479,
+                    "endAngle": 4.3217030120011835,
+                    "startPoint": [4279.213409362684, -1814.8833687220713],
+                    "endPoint": [4347.181513584739, -1788.4075324444466],
+                    "isCcw": false
+                }]
+            }]
+        }))
+        .unwrap();
+
+        let (_, bounds, _) = hatch_geometry(&properties, Matrix::IDENTITY);
+        let span = bounds
+            .iter()
+            .fold(f64::MIN, |widest, point| widest.max(point.x))
+            - bounds
+                .iter()
+                .fold(f64::MAX, |narrowest, point| narrowest.min(point.x));
+        assert!(
+            span < 200.0,
+            "the arc swept the long way round: x span {span}"
+        );
+    }
+
+    /// A boundary whose arc does not continue from the previous segment must be
+    /// walked to, not reached by inflating the arc itself.
+    #[test]
+    fn hatch_arc_after_a_gap_is_anchored_to_its_own_start() {
+        let properties = serde_json::from_value(json!({
+            "is_solid_fill": true,
+            "contours": [{
+                "isClosed": true,
+                "segments": [
+                    {"type": "line", "points": [[0, 0], [10, 0]]},
+                    {
+                        "type": "circularArc",
+                        "center": [1000, 0],
+                        "radius": 1000,
+                        "startAngle": 3.141592653589793,
+                        "endAngle": 3.0915926535897932,
+                        "startPoint": [0.0, 0.0],
+                        "endPoint": [1.2493, 49.979],
+                        "isCcw": false
+                    }
+                ]
+            }]
+        }))
+        .unwrap();
+
+        let (data, _, _) = hatch_geometry(&properties, Matrix::IDENTITY);
+        let arc_at = data.find(" A ").expect("expected an arc command");
+        assert!(
+            data[..arc_at].matches(" L ").count() >= 2,
+            "arc was not anchored back to its own start: {data}"
+        );
+    }
+
+    /// A counter-clockwise sweep wider than a half turn is legitimate and must
+    /// survive: only the reading of the clockwise flag changed, not the arcs.
+    #[test]
+    fn wide_hatch_arcs_are_still_drawn_the_long_way() {
+        let properties = serde_json::from_value(json!({
+            "is_solid_fill": true,
+            "contours": [{
+                "isClosed": true,
+                "segments": [{
+                    "type": "ellipticalArc",
+                    "center": [0, 0],
+                    "majorAxisVector": [10, 0],
+                    "minorMajorRatio": 1.0,
+                    "startAngle": 0.0,
+                    "endAngle": 4.71238898038469,
+                    "isCcw": true
+                }]
+            }]
+        }))
+        .unwrap();
+
+        let (_, bounds, _) = hatch_geometry(&properties, Matrix::IDENTITY);
+        let highest = bounds.iter().fold(f64::MIN, |highest, p| highest.max(p.y));
+        let lowest = bounds.iter().fold(f64::MAX, |lowest, p| lowest.min(p.y));
+        assert!(highest > 9.0, "the arc did not pass the top: {highest}");
+        assert!(lowest < -9.0, "the arc did not reach the bottom: {lowest}");
     }
 
     #[test]
