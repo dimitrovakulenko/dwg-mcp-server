@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import tomllib
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -27,7 +30,27 @@ SERVER_INSTRUCTIONS = (
     "the ways forward."
 )
 
-SERVER_VERSION = "0.2.1"
+def _detect_version() -> str:
+    """Reports the version this server was built from.
+
+    A source checkout, editable install included, answers from its own
+    pyproject.toml, because installed metadata goes stale there the moment the
+    version is bumped. An installed wheel has no pyproject beside the package
+    and answers from its metadata.
+    """
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    try:
+        with pyproject.open("rb") as handle:
+            return str(tomllib.load(handle)["project"]["version"])
+    except (OSError, KeyError, tomllib.TOMLDecodeError):
+        pass
+    try:
+        return distribution_version("dwg-mcp-server")
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
+
+
+SERVER_VERSION = _detect_version()
 
 READ_ONLY_TOOL = ToolAnnotations(readOnlyHint=True)
 MUTATING_TOOL = ToolAnnotations(
@@ -653,7 +676,7 @@ class DwgMcpApplication:
     def _initialization_options(self) -> InitializationOptions:
         return InitializationOptions(
             server_name="dwg-mcp-server",
-            server_version="0.1.0",
+            server_version=SERVER_VERSION,
             capabilities=self.server.get_capabilities(NotificationOptions(), {}),
             instructions=SERVER_INSTRUCTIONS,
         )

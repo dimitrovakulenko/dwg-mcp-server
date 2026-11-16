@@ -76,6 +76,26 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             await self.manager.list_file_types("missing-document")
 
 
+class ServerVersionTests(unittest.TestCase):
+    def test_version_follows_pyproject_in_a_source_checkout(self) -> None:
+        import tomllib
+
+        from dwg_mcp_server.app import SERVER_VERSION
+
+        pyproject = repo_root() / "server" / "pyproject.toml"
+        with pyproject.open("rb") as handle:
+            declared = tomllib.load(handle)["project"]["version"]
+
+        self.assertEqual(SERVER_VERSION, declared)
+
+    def test_reported_versions_agree(self) -> None:
+        from dwg_mcp_server.app import SERVER_VERSION
+
+        app = DwgMcpApplication()
+        self.assertEqual(app._initialization_options().server_version, SERVER_VERSION)
+        self.assertEqual(app.server.version, SERVER_VERSION)
+
+
 class ApplicationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.manager = SessionManager(worker_cwd=repo_root())
