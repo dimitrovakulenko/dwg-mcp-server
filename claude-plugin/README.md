@@ -31,7 +31,7 @@ The server is a native binary, too large to ship inside a plugin, so the
 plugin starts it through its npm launcher:
 
 ```
-npx -y @dmytro-prototypes/dwg-mcp-server@0.2.4
+npx -y @dmytro-prototypes/dwg-mcp-server@0.2.5
 ```
 
 On first run that launcher downloads the platform build for your computer from
@@ -40,9 +40,9 @@ checksum, and caches it under `~/.cache/dwg-mcp-server`. Later runs reuse the
 cache and download nothing. Set `DWG_MCP_CACHE_DIR` to cache it elsewhere.
 Node.js is required; Python and Docker are not.
 
-Supported platforms: macOS on Apple Silicon, Windows x64, Linux x64, and Linux
-ARM64. Intel macOS needs a release that publishes an Intel build; version
-0.2.4 does not have one.
+Supported platforms: macOS on Apple Silicon and Intel, Windows x64, Linux x64,
+and Linux ARM64. The Intel macOS build is published from version 0.2.5; earlier
+releases have no Intel asset.
 
 ## Where it runs
 

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "dwg-mcp-server",
   "display_name": "DWG MCP Server",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Inspect and render local DWG and DXF files. Source files remain unchanged.",
   "author": {
     "name": "Dmytro Vakulenko"
