@@ -10,10 +10,19 @@ const MAX_PIXELS: u64 = 16_777_216;
 const MAX_BLOCK_DEPTH: usize = 32;
 const MAX_DISPLAY_ITEMS: usize = 250_000;
 const MAX_SVG_BYTES: usize = 32 * 1024 * 1024;
+/// PNG output is bounded by [`MAX_PIXELS`] however dense the drawing is, and
+/// its SVG is a short-lived intermediate that never reaches the client, so
+/// rasterizing is allowed a larger budget than an SVG response.
+const MAX_RASTER_SVG_BYTES: usize = 512 * 1024 * 1024;
 const ROBUST_FIT_MIN_ITEMS: usize = 100;
 const ROBUST_FIT_TRIM_DIVISOR: usize = 100;
 const ROBUST_FIT_OUTLIER_RATIO: f64 = 4.0;
 const ROBUST_FIT_GAP_FRACTION: f64 = 0.25;
+/// How much larger than the drawing's declared extents an automatic model fit
+/// may be before the declared extents are used to trim it. Measured against
+/// real drawings: stray geometry typically pushes the fit well past this, while
+/// content that genuinely sits outside stale declared extents stays under it.
+const DECLARED_EXTENTS_CLAMP_RATIO: f64 = 1.5;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -573,9 +582,13 @@ impl RenderDocument {
             RenderTarget::Model => {
                 let items =
                     self.model_items(Matrix::IDENTITY, None, request.region, &mut diagnostics)?;
-                let bounds = automatic_bounds(&items, &mut diagnostics)
+                let mut bounds = automatic_bounds(&items, &mut diagnostics)
                     .or(request.region)
                     .ok_or(RenderError::EmptyTarget)?;
+                if request.region.is_none() {
+                    bounds =
+                        clamp_to_declared_extents(bounds, self.model_extents, &mut diagnostics);
+                }
                 (items, bounds)
             }
             RenderTarget::Layout { layout_handle } => {
@@ -630,6 +643,10 @@ impl RenderDocument {
             request.width,
             request.height,
             request.background,
+            match request.format {
+                RenderFormat::Svg => MAX_SVG_BYTES,
+                RenderFormat::Png => MAX_RASTER_SVG_BYTES,
+            },
         )?;
         let (mime_type, bytes) = match request.format {
             RenderFormat::Svg => ("image/svg+xml", svg.into_bytes()),
@@ -2212,6 +2229,57 @@ fn grow_above(sorted: &[f64], start: usize, tolerance: f64) -> f64 {
     bound
 }
 
+/// Trims an automatic fit back to the extents the drawing itself declares
+/// (header EXTMIN/EXTMAX), on any axis where the fit came out far larger.
+///
+/// Stray far-off geometry can defeat the robust trim in [`automatic_bounds`]
+/// when enough of it is spread out to look like a continuous run of content,
+/// which leaves the real drawing as a speck in the corner of the image. The
+/// declared extents are what the authoring application recorded, so they are
+/// used only to pull such a fit back in, never to crop a fit that is merely a
+/// little wider than them, and never when the caller asked for a region.
+fn clamp_to_declared_extents(
+    mut bounds: Bounds,
+    declared: Option<Bounds>,
+    diagnostics: &mut RenderDiagnostics,
+) -> Bounds {
+    let Some(declared) = declared.filter(|bounds| bounds.valid()) else {
+        return bounds;
+    };
+
+    let mut clamped = Vec::new();
+    for axis in 0..2 {
+        let span = bounds.max[axis] - bounds.min[axis];
+        let declared_span = declared.max[axis] - declared.min[axis];
+        if !(declared_span > 0.0) || !(span / declared_span >= DECLARED_EXTENTS_CLAMP_RATIO) {
+            continue;
+        }
+        let min = bounds.min[axis].max(declared.min[axis]);
+        let max = bounds.max[axis].min(declared.max[axis]);
+        if !(max > min) {
+            continue;
+        }
+        bounds.min[axis] = min;
+        bounds.max[axis] = max;
+        clamped.push(if axis == 0 { "x" } else { "y" });
+    }
+
+    if clamped.is_empty() {
+        return bounds;
+    }
+    diagnostics.warnings.push(format!(
+        "automatic fit trimmed to the drawing's declared {}-axis extents; \
+         use an explicit region to include content outside them (declared extents: \
+         [{}, {}] to [{}, {}])",
+        clamped.join("/"),
+        f(declared.min[0]),
+        f(declared.min[1]),
+        f(declared.max[0]),
+        f(declared.max[1])
+    ));
+    bounds
+}
+
 fn fit_output_aspect(mut bounds: Bounds, width: u32, height: u32) -> Bounds {
     let target = f64::from(width) / f64::from(height);
     let current_width = bounds.max[0] - bounds.min[0];
@@ -2245,8 +2313,9 @@ fn svg_document(
     width: u32,
     height: u32,
     background: RenderBackground,
+    max_bytes: usize,
 ) -> Result<String, RenderError> {
-    ensure_svg_size(items)?;
+    ensure_svg_size(items, max_bytes)?;
     let bg = match background {
         RenderBackground::Transparent => None,
         RenderBackground::Model | RenderBackground::Black => Some("#111827"),
@@ -2431,7 +2500,7 @@ fn svg_document(
     ))
 }
 
-fn ensure_svg_size(items: &[DisplayItem]) -> Result<(), RenderError> {
+fn ensure_svg_size(items: &[DisplayItem], max_bytes: usize) -> Result<(), RenderError> {
     let mut estimated = 1024usize;
     for item in items {
         let content = match &item.graphic {
@@ -2442,10 +2511,11 @@ fn ensure_svg_size(items: &[DisplayItem]) -> Result<(), RenderError> {
         estimated = estimated
             .checked_add(content.saturating_add(320))
             .ok_or_else(|| RenderError::ResourceLimit("SVG size overflow".to_owned()))?;
-        if estimated > MAX_SVG_BYTES {
+        if estimated > max_bytes {
             return Err(RenderError::ResourceLimit(format!(
-                "estimated SVG exceeds {} MiB; request a smaller explicit region",
-                MAX_SVG_BYTES / 1024 / 1024
+                "drawing needs more than {} MiB of SVG; render a smaller explicit region, \
+                 a single layout or viewport, or ask for PNG instead of SVG",
+                max_bytes / 1024 / 1024
             )));
         }
     }
@@ -2881,6 +2951,7 @@ mod tests {
             100,
             100,
             RenderBackground::White,
+            MAX_SVG_BYTES,
         )
         .unwrap();
         assert!(svg.contains("r=\"0.5\"/>"));
@@ -3268,6 +3339,146 @@ mod tests {
         );
     }
 
+    /// Builds a model-space drawing whose real content sits in a small area and
+    /// whose stray geometry marches far enough outwards, in small enough steps,
+    /// to survive the robust trim in `automatic_bounds`.
+    fn drawing_with_strays_beyond_declared_extents(header: Option<Value>) -> Vec<SourceEntity> {
+        let mut entities = vec![entity(
+            "C",
+            "BLOCK_CONTROL",
+            None,
+            json!({"model_space":"M"}),
+        )];
+        if let Some(header) = header {
+            entities.push(entity("H", "HEADER", None, header));
+        }
+        for index in 0..300 {
+            let y = f64::from(index / 3);
+            entities.push(entity(
+                &format!("L{index}"),
+                "AcDbLine",
+                Some("M"),
+                json!({"start":[0,y,0],"end":[100,y,0]}),
+            ));
+        }
+        for index in 0..40 {
+            let y = 120.0 + f64::from(index) * 10.0;
+            entities.push(entity(
+                &format!("STRAY{index}"),
+                "AcDbLine",
+                Some("M"),
+                json!({"start":[0,y,0],"end":[1,y,0]}),
+            ));
+        }
+        entities
+    }
+
+    #[test]
+    fn automatic_fit_is_trimmed_to_declared_extents() {
+        let output = RenderDocument::new(drawing_with_strays_beyond_declared_extents(Some(
+            json!({"EXTMIN":[0,0,0],"EXTMAX":[100,100,0]}),
+        )))
+        .render(RenderRequest {
+            format: RenderFormat::Svg,
+            ..serde_json::from_value(json!({})).unwrap()
+        })
+        .unwrap();
+
+        // Padding and the output aspect ratio widen the trimmed fit a little,
+        // so this checks the strays at y >= 120 are gone, not an exact edge.
+        assert!(
+            output.rendered_region.max[1] < 115.0,
+            "strays past the declared extents still drove the fit: {:?}",
+            output.rendered_region
+        );
+        assert!(
+            output
+                .diagnostics
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("declared y-axis extents")),
+            "missing diagnostic: {:?}",
+            output.diagnostics.warnings
+        );
+    }
+
+    #[test]
+    fn automatic_fit_without_declared_extents_is_unchanged() {
+        let output = RenderDocument::new(drawing_with_strays_beyond_declared_extents(None))
+            .render(RenderRequest {
+                format: RenderFormat::Svg,
+                ..serde_json::from_value(json!({})).unwrap()
+            })
+            .unwrap();
+
+        assert!(
+            output.rendered_region.max[1] > 200.0,
+            "fit changed although the drawing declares no extents: {:?}",
+            output.rendered_region
+        );
+    }
+
+    /// Content reaching 140 against declared extents of 100 stays just under
+    /// [`DECLARED_EXTENTS_CLAMP_RATIO`], which is the case the trim must leave
+    /// alone: declared extents that are merely stale, not geometry gone astray.
+    #[test]
+    fn declared_extents_do_not_crop_a_slightly_larger_fit() {
+        let mut entities = vec![
+            entity("C", "BLOCK_CONTROL", None, json!({"model_space":"M"})),
+            entity(
+                "H",
+                "HEADER",
+                None,
+                json!({"EXTMIN":[0,0,0],"EXTMAX":[100,100,0]}),
+            ),
+        ];
+        for index in 0..300 {
+            let y = f64::from(index / 2) * 0.5;
+            entities.push(entity(
+                &format!("L{index}"),
+                "AcDbLine",
+                Some("M"),
+                json!({"start":[0,y,0],"end":[140,y,0]}),
+            ));
+        }
+
+        let output = RenderDocument::new(entities)
+            .render(RenderRequest {
+                format: RenderFormat::Svg,
+                ..serde_json::from_value(json!({})).unwrap()
+            })
+            .unwrap();
+
+        assert!(
+            output.rendered_region.max[0] >= 140.0,
+            "content just outside stale declared extents was cropped: {:?}",
+            output.rendered_region
+        );
+    }
+
+    #[test]
+    fn explicit_region_ignores_declared_extents() {
+        let output = RenderDocument::new(drawing_with_strays_beyond_declared_extents(Some(
+            json!({"EXTMIN":[0,0,0],"EXTMAX":[100,100,0]}),
+        )))
+        .render(RenderRequest {
+            format: RenderFormat::Svg,
+            ..serde_json::from_value(json!({"region":{"min":[0.0,0.0],"max":[200.0,600.0]}}))
+                .unwrap()
+        })
+        .unwrap();
+
+        assert_eq!(output.rendered_region.max[1], 600.0);
+        assert!(
+            output
+                .diagnostics
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("declared")),
+            "explicit region should not report a declared-extents trim"
+        );
+    }
+
     #[test]
     fn automatic_fit_keeps_outliers_that_continue_outwards() {
         let mut entities = vec![entity(
@@ -3456,8 +3667,37 @@ mod tests {
         };
 
         assert!(matches!(
-            ensure_svg_size(&[item]),
+            ensure_svg_size(&[item], MAX_SVG_BYTES),
             Err(RenderError::ResourceLimit(_))
         ));
+    }
+
+    /// A drawing whose SVG is too large to hand back to a client can still be
+    /// rasterized: the PNG is bounded by its pixel count, not by the size of
+    /// the intermediate SVG.
+    #[test]
+    fn dense_drawings_stay_rasterizable_after_svg_output_is_refused() {
+        let item = DisplayItem {
+            handle: "1".to_owned(),
+            type_name: "AcDbLine".to_owned(),
+            color: "#000000".to_owned(),
+            graphic: Graphic::Path {
+                data: "x".repeat(MAX_SVG_BYTES),
+                fill: false,
+                transform: None,
+            },
+            bounds: Bounds {
+                min: [0.0, 0.0],
+                max: [1.0, 1.0],
+            },
+            clip: None,
+            method: "native",
+        };
+
+        assert!(matches!(
+            ensure_svg_size(std::slice::from_ref(&item), MAX_SVG_BYTES),
+            Err(RenderError::ResourceLimit(_))
+        ));
+        assert!(ensure_svg_size(&[item], MAX_RASTER_SVG_BYTES).is_ok());
     }
 }
