@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "dwg-mcp-server",
+  "version": "0.2.3",
+  "description": "Inspect and render local DWG and DXF files. Source files remain unchanged.",
+  "author": { "name": "Dmytro Vakulenko" },
+  "license": "GPL-3.0-or-later",
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "interface": {
+        "displayName": "DWG MCP Server",
+        "shortDescription": "Inspect DWG and DXF files",
+        "category": "Productivity"
+      }
+    }
+  }
+}

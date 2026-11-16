@@ -1,0 +1,27 @@
+{
+  "manifest_version": "0.3",
+  "name": "dwg-mcp-server",
+  "display_name": "DWG MCP Server",
+  "version": "0.2.4",
+  "description": "Inspect and render local DWG and DXF files. Source files remain unchanged.",
+  "author": {
+    "name": "Dmytro Vakulenko"
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "server/dwg-mcp-server",
+    "mcp_config": {
+      "command": "${__dirname}/server/dwg-mcp-server",
+      "args": ["--allowed-root", "${user_config.drawings_directory}"]
+    }
+  },
+  "user_config": {
+    "drawings_directory": {
+      "type": "directory",
+      "title": "Drawings folder",
+      "description": "Folder containing the DWG and DXF files you want to access.",
+      "required": true
+    }
+  },
+  "license": "GPL-3.0-or-later"
+}

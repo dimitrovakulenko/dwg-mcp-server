@@ -1,0 +1,65 @@
+name: Pack Desktop Extensions
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Native release to package
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - x86_64-pc-windows-gnu
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.target == 'all' && '["aarch64-apple-darwin","x86_64-apple-darwin","x86_64-pc-windows-gnu","x86_64-unknown-linux-gnu","aarch64-unknown-linux-gnu"]' || format('["{0}"]', inputs.target)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download and verify native release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          version=$(python -c "import json; print(json.load(open('npm/package.json'))['version'])")
+          archive="dwg-mcp-server-${version}-${TARGET}.tar.gz"
+          gh release download "v${version}" --repo "${{ github.repository }}" \
+            --pattern "$archive" --pattern "$archive.sha256"
+          echo "$(cat "$archive.sha256")  $archive" | sha256sum --check
+          mkdir native
+          tar -xzf "$archive" -C native
+
+      - name: Pack Claude and ChatGPT extensions
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python scripts/pack-desktop.py native/dwg-mcp-server --target "$TARGET"
+
+      - name: Upload desktop packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: |
+            target/desktop-packages/*.mcpb
+            target/desktop-packages/*-chatgpt.zip
+          if-no-files-found: error

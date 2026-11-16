@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "dwg-mcp": {
+      "type": "stdio",
+      "command": "${PLUGIN_ROOT}/server/dwg-mcp-server",
+      "args": [],
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}
