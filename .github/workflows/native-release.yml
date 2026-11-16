@@ -15,6 +15,7 @@ on:
           - linux-x64
           - linux-arm64
           - macos-arm64
+          - macos-x64
           - windows-x64
 
 permissions:
@@ -34,10 +35,11 @@ jobs:
           PLATFORM: ${{ inputs.platform || 'all' }}
         run: |
           case "$PLATFORM" in
-            all) matrix='{"include":[{"platform":"linux-x64","os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","executable_suffix":""},{"platform":"linux-arm64","os":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu","executable_suffix":""},{"platform":"macos-arm64","os":"macos-15","target":"aarch64-apple-darwin","executable_suffix":""},{"platform":"windows-x64","os":"windows-2025","target":"x86_64-pc-windows-gnu","executable_suffix":".exe"}]}' ;;
+            all) matrix='{"include":[{"platform":"linux-x64","os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","executable_suffix":""},{"platform":"linux-arm64","os":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu","executable_suffix":""},{"platform":"macos-arm64","os":"macos-15","target":"aarch64-apple-darwin","executable_suffix":""},{"platform":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","executable_suffix":""},{"platform":"windows-x64","os":"windows-2025","target":"x86_64-pc-windows-gnu","executable_suffix":".exe"}]}' ;;
             linux-x64) matrix='{"include":[{"platform":"linux-x64","os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","executable_suffix":""}]}' ;;
             linux-arm64) matrix='{"include":[{"platform":"linux-arm64","os":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu","executable_suffix":""}]}' ;;
             macos-arm64) matrix='{"include":[{"platform":"macos-arm64","os":"macos-15","target":"aarch64-apple-darwin","executable_suffix":""}]}' ;;
+            macos-x64) matrix='{"include":[{"platform":"macos-x64","os":"macos-15-intel","target":"x86_64-apple-darwin","executable_suffix":""}]}' ;;
             windows-x64) matrix='{"include":[{"platform":"windows-x64","os":"windows-2025","target":"x86_64-pc-windows-gnu","executable_suffix":".exe"}]}' ;;
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -198,6 +200,10 @@ jobs:
           tar -xzf "dwg-mcp-server-${VERSION}-${{ matrix.target }}.tar.gz" -C smoke
           python scripts/smoke-native-package.py smoke/dwg-mcp-server/dwg-mcp-server${{ matrix.executable_suffix }}
 
+      - name: Pack desktop extensions
+        shell: bash
+        run: python scripts/pack-desktop.py dist/dwg-mcp-server --target "${{ matrix.target }}" --output .
+
       - name: Upload native artifact
         uses: actions/upload-artifact@v4
         with:
@@ -205,6 +211,8 @@ jobs:
           path: |
             dwg-mcp-server-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
             dwg-mcp-server-${{ env.VERSION }}-${{ matrix.target }}.tar.gz.sha256
+            dwg-mcp-server-*.mcpb
+            dwg-mcp-server-*-chatgpt.zip
           if-no-files-found: error
 
   release:
